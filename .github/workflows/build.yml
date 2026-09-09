@@ -1,0 +1,82 @@
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1.0'
+
+      - name: Provision exact PlexonCore 2.0.2 API
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_jar="${RUNNER_TEMP}/PlexonCore-2.0.2.jar"
+          curl --fail --location --silent --show-error \
+            --output "${core_jar}" \
+            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.2/PlexonCore-2.0.2.jar"
+          echo "7e096ada4293017203cd4e01cb93761d169fa4c756fc46af520b2aed11a10ef5  ${core_jar}" | sha256sum --check
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile="${core_jar}" \
+            -DgroupId=com.zpkdxgames \
+            -DartifactId=PlexonCore \
+            -Dversion=2.0.2 \
+            -Dpackaging=jar \
+            -DgeneratePom=true
+
+      - name: Test, document and package
+        run: gradle --no-daemon clean test check javadoc shadowJar verifyDistribution --stacktrace
+
+      - name: Verify distribution contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar_path='build/libs/PlexonJobs-1.0.0.jar'
+          test -s "${jar_path}"
+          jar tf "${jar_path}" > build/jar-contents.txt
+          grep -qx 'plugin.yml' build/jar-contents.txt
+          grep -qx 'com/plexon/jobs/PlexonJobs.class' build/jar-contents.txt
+          grep -qx 'com/plexon/jobs/api/PlexonJobsAPI.class' build/jar-contents.txt
+          grep -qx 'org/sqlite/JDBC.class' build/jar-contents.txt
+          if grep -q '^com/zpkdxgames/plexoncore/' build/jar-contents.txt; then
+            echo 'PlexonCore runtime classes must not be shaded into PlexonJobs' >&2
+            exit 1
+          fi
+          unzip -p "${jar_path}" plugin.yml | sed -n 's/^version:[[:space:]]*//p' | head -n 1 | tr -d " '\"\r" | grep -qx '1.0.0'
+          javap -verbose -classpath "${jar_path}" com.plexon.jobs.PlexonJobs | grep -q 'major version: 69'
+          sha256sum "${jar_path}" | sed 's#build/libs/##' > build/SHA256SUMS.txt
+          (cd build/libs && sha256sum --check ../SHA256SUMS.txt)
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Upload verified artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlexonJobs-1.0.0-${{ github.sha }}
+          path: |
+            build/libs/PlexonJobs-1.0.0.jar
+            build/SHA256SUMS.txt
+          if-no-files-found: error

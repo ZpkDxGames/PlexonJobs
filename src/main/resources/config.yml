@@ -1,0 +1,36 @@
+runtime:
+  # DISABLED = no activity processing, SHADOW = calculate only, PRIMARY = mutate XP and pay economy.
+  mode: SHADOW
+  core-api-range: ">=2.0 <3.0"
+
+membership:
+  default-max-jobs: 3
+  keep-level-on-leave: true
+
+payout:
+  mode: COALESCED
+  flush-ticks: 40
+  max-commits-per-tick: 100
+  matching-jobs: ALL
+  retry-limit: 3
+  money-scale: 2
+
+limits:
+  reset-timezone: "America/Sao_Paulo"
+  default-money-per-day: 5000.00
+  default-xp-per-day: 250000
+
+profiles:
+  loading-policy: SUPPRESS
+  save-interval-ticks: 200
+
+gameplay:
+  allowed-game-modes: [SURVIVAL]
+  disabled-worlds: []
+
+diagnostics:
+  log-payout-failures: true
+  audit-retention-hours: 24
+
+compatibility:
+  claim-jobs-command: true

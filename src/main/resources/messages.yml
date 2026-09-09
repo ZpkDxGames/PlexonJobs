@@ -1,0 +1,8 @@
+prefix: "<gray>[<gold>PlexonJobs</gold>]</gray> "
+profile-loading: "<yellow>Your Jobs profile is still loading.</yellow>"
+joined: "<green>Joined job <job>.</green>"
+left: "<yellow>Left job <job>.</yellow>"
+already-joined: "<red>You are already in that job.</red>"
+not-joined: "<red>You are not in that job.</red>"
+max-jobs: "<red>You have reached your active job limit.</red>"
+unknown-job: "<red>Unknown job.</red>"

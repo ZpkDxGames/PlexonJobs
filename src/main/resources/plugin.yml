@@ -1,0 +1,27 @@
+name: PlexonJobs
+version: '${version}'
+main: com.plexon.jobs.PlexonJobs
+api-version: '26.2'
+author: ZpkDxGames
+description: Core-native occupation, progression and economy system for PlexonCraft.
+depend:
+  - PlexonCore
+softdepend:
+  - Vault
+  - PlaceholderAPI
+commands:
+  jobs:
+    description: Browse and manage jobs.
+    usage: /jobs
+    aliases: [job]
+  jobsadmin:
+    description: PlexonJobs administration and diagnostics.
+    usage: /jobsadmin
+    permission: plexonjobs.admin
+permissions:
+  plexonjobs.admin:
+    default: op
+  plexonjobs.use:
+    default: true
+  plexonjobs.maxjobs.1:
+    default: true
