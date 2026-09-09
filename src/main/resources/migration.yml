@@ -1,0 +1,14 @@
+legacy-jobs:
+  mode: DISABLED
+  source-path: "../Jobs"
+  source-type: AUTO
+  level-policy: PRESERVE_LEVEL
+
+legacy-job-map:
+  Miner: miner
+  Woodcutter: woodcutter
+  Farmer: farmer
+  Hunter: hunter
+  Fisherman: fisher
+  Digger: digger
+  Builder: builder
