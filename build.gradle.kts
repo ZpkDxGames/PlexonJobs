@@ -19,7 +19,9 @@ java {
 dependencies {
     compileOnly("io.papermc.paper:paper-api:26.2.build.121-stable")
     compileOnly("com.zpkdxgames:PlexonCore:2.0.2")
-    compileOnly("com.github.MilkBowl:VaultAPI:1.7")
+    compileOnly("com.github.MilkBowl:VaultAPI:1.7") {
+        exclude(group = "org.bukkit", module = "bukkit")
+    }
     compileOnly("me.clip:placeholderapi:2.11.6")
 
     implementation("org.xerial:sqlite-jdbc:3.53.4.0") {
