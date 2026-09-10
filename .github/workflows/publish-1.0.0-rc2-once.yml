@@ -28,7 +28,7 @@ jobs:
             echo 'v1.0.0-rc.2 release already exists; refusing overwrite.' >&2
             exit 1
           fi
-          existing=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v1.0.0-rc.2" --jq '.object.sha' 2>/dev/null || true)
+          existing=$(git rev-parse -q --verify 'refs/tags/v1.0.0-rc.2^{commit}' 2>/dev/null || true)
           if [[ -n "${existing}" && "${existing}" != "${GITHUB_SHA}" ]]; then
             echo "Existing RC2 tag targets ${existing}, expected ${GITHUB_SHA}" >&2
             exit 1
@@ -125,7 +125,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          existing=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v1.0.0-rc.2" --jq '.object.sha' 2>/dev/null || true)
+          existing=$(git rev-parse -q --verify 'refs/tags/v1.0.0-rc.2^{commit}' 2>/dev/null || true)
           if [[ -z "${existing}" ]]; then
             gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref='refs/tags/v1.0.0-rc.2' -f sha="${GITHUB_SHA}" >/dev/null
           fi
