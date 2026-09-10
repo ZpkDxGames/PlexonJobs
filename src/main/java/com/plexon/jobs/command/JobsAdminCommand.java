@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 
 public final class JobsAdminCommand implements TabExecutor {
+    private static final long MAX_SIMULATION_ACTIONS = 100_000L;
     private final PlexonJobs plugin;
 
     public JobsAdminCommand(PlexonJobs plugin) { this.plugin = plugin; }
@@ -26,7 +27,7 @@ public final class JobsAdminCommand implements TabExecutor {
             case "reload" -> {
                 try {
                     plugin.reloadJobs();
-                    sender.sendMessage(ChatColor.GREEN + "PlexonJobs runtime configuration reloaded atomically.");
+                    sender.sendMessage(ChatColor.GREEN + "PlexonJobs runtime configuration reloaded transactionally.");
                 } catch (RuntimeException ex) {
                     sender.sendMessage(ChatColor.RED + "Reload rejected; previous runtime remains active: " + ex.getMessage());
                 }
@@ -40,7 +41,7 @@ public final class JobsAdminCommand implements TabExecutor {
             }
             case "migration" -> migration(sender, args);
             case "simulate" -> simulate(sender, args);
-            case "backup" -> sender.sendMessage(ChatColor.YELLOW + "Stop/flush PlexonJobs and copy plugins/PlexonJobs/jobs.db plus YAML configuration. See docs/RECOVERY.md.");
+            case "backup" -> sender.sendMessage(ChatColor.YELLOW + "Stop/flush PlexonJobs and copy plugins/PlexonJobs/jobs.db plus YAML configuration. See docs/PHASE2_ARCHITECTURE.md.");
             default -> usage(sender);
         }
         return true;
@@ -52,14 +53,15 @@ public final class JobsAdminCommand implements TabExecutor {
         sender.sendMessage(ChatColor.GOLD + "PlexonJobs diagnostics");
         sender.sendMessage(ChatColor.GRAY + "Mode: " + runtime.config().mode() + " | Core: " + plugin.core().version().pluginVersion() + " API " + plugin.core().version().apiVersion());
         sender.sendMessage(ChatColor.GRAY + "Jobs: " + runtime.registry().definitions().size() + " | Core break materials: " + runtime.registry().breakMaterials().size());
-        sender.sendMessage(ChatColor.GRAY + "Profiles: cached=" + runtime.profiles().onlineCached() + ", loading=" + runtime.profiles().loadingCount() + ", dirty=" + runtime.profiles().dirtyCount());
+        sender.sendMessage(ChatColor.GRAY + "Profiles: cached=" + runtime.profiles().onlineCached() + ", loading=" + runtime.profiles().loadingCount() + ", dirty=" + runtime.profiles().dirtyCount() + ", saving=" + runtime.profiles().savingCount());
         sender.sendMessage(ChatColor.GRAY + "Economy: available=" + plugin.payouts().economyAvailable() + ", pendingPlayers=" + plugin.payouts().pendingPlayers() +
                 ", pending=" + Money.format(plugin.payouts().totalPending(), runtime.config().moneyScale()) + ", oldestMs=" + plugin.payouts().oldestPendingAgeMillis() +
                 ", retryBlocked=" + plugin.payouts().blockedPlayers());
+        sender.sendMessage(ChatColor.GRAY + "Payouts: flushes=" + metrics.payoutFlushes() + ", commits=" + metrics.payoutCommits() + ", failed=" + metrics.failedDeposits());
         sender.sendMessage(ChatColor.GRAY + "Activities: callbacks=" + metrics.callbacks() + ", fastRejects=" + metrics.fastRejects() + ", originRejects=" + metrics.originRejects() +
                 ", eligible=" + metrics.eligible() + ", capped=" + metrics.capped());
         sender.sendMessage(ChatColor.GRAY + "Shadow: moneyMinor=" + metrics.shadowMoneyMinor() + ", xp=" + metrics.shadowXp() + " | shadowBuffer=" + plugin.shadow().size());
-        sender.sendMessage(ChatColor.GRAY + "Persistence: Core IO queue=" + plugin.core().scheduler().ioQueueSize() + " | day=" + plugin.limits().day());
+        sender.sendMessage(ChatColor.GRAY + "Persistence: schema=" + plugin.database().schemaVersion() + " | Core IO queue=" + plugin.core().scheduler().ioQueueSize() + " | day=" + plugin.limits().day());
         sender.sendMessage(ChatColor.GRAY + "Core gateway routes=" + plugin.core().events().compiledBlockRoutes() + " | metrics=" + plugin.core().events().metrics());
     }
 
@@ -84,12 +86,20 @@ public final class JobsAdminCommand implements TabExecutor {
         Material material = Material.matchMaterial(args[2]);
         if (job == null || material == null) { sender.sendMessage(ChatColor.RED + "Unknown job or material."); return; }
         long count;
-        try { count = Math.max(0, Long.parseLong(args[3])); } catch (NumberFormatException ex) { sender.sendMessage(ChatColor.RED + "Count must be an integer."); return; }
+        try { count = Long.parseLong(args[3]); } catch (NumberFormatException ex) { sender.sendMessage(ChatColor.RED + "Count must be an integer."); return; }
+        if (count < 0 || count > MAX_SIMULATION_ACTIONS) {
+            sender.sendMessage(ChatColor.RED + "Count must be between 0 and " + MAX_SIMULATION_ACTIONS + ".");
+            return;
+        }
         var reward = job.breakReward(material);
-        long money = Math.multiplyExact(reward.moneyMinorUnits(), count);
-        long xp = Math.multiplyExact(reward.jobXpUnits(), count);
-        sender.sendMessage(ChatColor.GOLD + job.id() + " / " + material + " x" + count + ": " +
-                ChatColor.GREEN + Money.format(money, plugin.runtime().config().moneyScale()) + ChatColor.GRAY + " money, " + xp + " job XP before daily caps.");
+        try {
+            long money = Math.multiplyExact(reward.moneyMinorUnits(), count);
+            long xp = Math.multiplyExact(reward.jobXpUnits(), count);
+            sender.sendMessage(ChatColor.GOLD + job.id() + " / " + material + " x" + count + ": " +
+                    ChatColor.GREEN + Money.format(money, plugin.runtime().config().moneyScale()) + ChatColor.GRAY + " money, " + xp + " job XP before daily caps. No state was granted.");
+        } catch (ArithmeticException overflow) {
+            sender.sendMessage(ChatColor.RED + "Simulation total overflowed the supported numeric range.");
+        }
     }
 
     private static boolean usage(CommandSender sender) {

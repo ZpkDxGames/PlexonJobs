@@ -1,5 +1,5 @@
 runtime:
-  # DISABLED = no activity processing, SHADOW = calculate only, PRIMARY = mutate XP and pay economy.
+  # DISABLED = no activity processing, SHADOW = calculate only, PRIMARY = mutate XP and accrue economy payouts.
   mode: SHADOW
   core-api-range: ">=2.0 <3.0"
 
@@ -8,10 +8,10 @@ membership:
   keep-level-on-leave: true
 
 payout:
+  # Phase 2 requires coalescing. IMMEDIATE/per-event Vault deposits are intentionally unsupported.
   mode: COALESCED
   flush-ticks: 40
   max-commits-per-tick: 100
-  matching-jobs: ALL
   retry-limit: 3
   money-scale: 2
 
@@ -21,7 +21,6 @@ limits:
   default-xp-per-day: 250000
 
 profiles:
-  loading-policy: SUPPRESS
   save-interval-ticks: 200
 
 gameplay:

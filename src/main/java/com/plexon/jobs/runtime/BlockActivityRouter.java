@@ -58,7 +58,7 @@ public final class BlockActivityRouter {
             JobProgress progress = profile.jobs().get(job.id());
             if (progress == null || !progress.joined()) continue;
             ActivityReward base = job.breakReward(context.material());
-            if (base == null || base.empty()) continue;
+            if (base.empty()) continue;
             metrics.eligible();
             metrics.calculated();
 
@@ -89,10 +89,7 @@ public final class BlockActivityRouter {
                             delta.oldLevel(), delta.newLevel(), delta.totalXp(), "core:block:" + context.eventId()));
                 }
             }
-            if (clamped.moneyMinor() > 0) {
-                payouts.accrue(context.playerId(), clamped.moneyMinor());
-                if (config.payoutMode() == JobsConfig.PayoutMode.IMMEDIATE) payouts.flush(1);
-            }
+            if (clamped.moneyMinor() > 0) payouts.accrue(context.playerId(), clamped.moneyMinor());
         }
     }
 }

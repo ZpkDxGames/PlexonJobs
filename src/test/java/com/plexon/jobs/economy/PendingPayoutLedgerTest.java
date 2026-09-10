@@ -30,4 +30,24 @@ class PendingPayoutLedgerTest {
         assertFalse(first.empty());
         assertTrue(ledger.begin(id).empty());
     }
+
+    @Test void hundredThousandAccrualsRetainOneCoalescedPlayerEntry() {
+        PendingPayoutLedger ledger = new PendingPayoutLedger();
+        UUID id = UUID.randomUUID();
+        for (int i = 0; i < 100_000; i++) ledger.add(id, 20);
+        assertEquals(1, ledger.players());
+        assertEquals(2_000_000L, ledger.pending(id));
+        assertEquals(1, ledger.readyPlayers(10).size());
+    }
+
+    @Test void staleCompletionCannotAcknowledgeNewSnapshot() {
+        PendingPayoutLedger ledger = new PendingPayoutLedger();
+        UUID id = UUID.randomUUID();
+        ledger.add(id, 50);
+        var first = ledger.begin(id);
+        ledger.success(first);
+        ledger.add(id, 75);
+        ledger.begin(id);
+        assertThrows(IllegalStateException.class, () -> ledger.success(first));
+    }
 }
