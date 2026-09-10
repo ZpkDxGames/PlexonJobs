@@ -98,10 +98,7 @@ public final class PlexonJobs extends JavaPlugin {
     public void onDisable() {
         cancelTasks();
         closeBlockSubscription();
-        if (expansion != null) {
-            try { expansion.unregister(); } catch (RuntimeException ignored) { }
-            expansion = null;
-        }
+        unregisterExpansion();
         if (payouts != null) {
             while (payouts.totalPending() > 0 && payouts.economyAvailable()) {
                 int committed = payouts.flush(runtime == null ? 100 : runtime.config().maxCommitsPerTick());
@@ -140,10 +137,7 @@ public final class PlexonJobs extends JavaPlugin {
 
         try {
             cancelTasks();
-            if (expansion != null) {
-                try { expansion.unregister(); } catch (RuntimeException ignored) { }
-                expansion = null;
-            }
+            unregisterExpansion();
             unregisterApiService();
             installPrepared(next);
             blockSubscription = nextSubscription;
@@ -153,14 +147,18 @@ public final class PlexonJobs extends JavaPlugin {
             scheduleRuntimeTasks();
             updateModuleState();
         } catch (RuntimeException failure) {
+            cancelTasks();
+            unregisterExpansion();
+            unregisterApiService();
             closeSubscription(nextSubscription);
             runtime = previousRuntime;
             payouts = previousPayouts;
             blockRouter = previousRouter;
             blockSubscription = subscribeBlockBreaks(previousRuntime.registry(), previousRouter);
-            try { registerApiService(); } catch (RuntimeException ignored) { }
+            registerApiService();
             registerPlaceholderApi();
             scheduleRuntimeTasks();
+            updateModuleState();
             throw failure;
         }
     }
@@ -220,6 +218,12 @@ public final class PlexonJobs extends JavaPlugin {
 
     private void unregisterApiService() {
         if (runtime != null) Bukkit.getServicesManager().unregister(PlexonJobsAPI.class, runtime);
+    }
+
+    private void unregisterExpansion() {
+        if (expansion == null) return;
+        try { expansion.unregister(); } catch (RuntimeException ignored) { }
+        expansion = null;
     }
 
     private void registerPlaceholderApi() {
