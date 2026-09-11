@@ -7,9 +7,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -23,6 +25,7 @@ public final class ProfileManager {
     private final Set<UUID> dirty = ConcurrentHashMap.newKeySet();
     private final Set<UUID> loading = ConcurrentHashMap.newKeySet();
     private final Set<UUID> saving = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, CompletableFuture<Void>> saveFutures = new ConcurrentHashMap<>();
 
     public ProfileManager(PlexonCoreAPI core, JobsDatabase database, Logger logger) {
         this.core = core;
@@ -66,7 +69,23 @@ public final class ProfileManager {
         }
     }
 
+    /**
+     * Waits for every async profile write that was already scheduled at the shutdown boundary.
+     * The caller must stop event/task producers before invoking this method so no newer async save
+     * can be created after the snapshot of futures is taken.
+     */
+    public void awaitInFlightSaves() {
+        List<CompletableFuture<Void>> futures = List.copyOf(saveFutures.values());
+        if (futures.isEmpty()) return;
+        CompletableFuture<?>[] settled = futures.stream()
+                .map(future -> future.handle((unused, error) -> null))
+                .toArray(CompletableFuture[]::new);
+        CompletableFuture.allOf(settled).join();
+    }
+
     public void saveAllBlocking() {
+        // An older async snapshot must never be allowed to land after the final authoritative save.
+        awaitInFlightSaves();
         for (UUID playerId : Set.copyOf(profiles.keySet())) {
             PlayerJobsProfile profile = profiles.get(playerId);
             if (profile == null || profile.state() != PlayerJobsProfile.State.READY) continue;
@@ -85,6 +104,7 @@ public final class ProfileManager {
     public long loadingCount() { return profiles.values().stream().filter(p -> p.state() == PlayerJobsProfile.State.LOADING).count(); }
     public int dirtyCount() { return dirty.size(); }
     public int savingCount() { return saving.size(); }
+    public int inFlightSaveCount() { return (int) saveFutures.values().stream().filter(future -> !future.isDone()).count(); }
 
     private void requestLoad(UUID playerId, PlayerJobsProfile loadingProfile, long generation) {
         if (!loading.add(playerId)) return;
@@ -112,8 +132,11 @@ public final class ProfileManager {
         OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(playerId);
         String name = offlinePlayer.getName();
         try {
-            core.scheduler().runIo(() -> database.save(snapshot, name)).whenComplete((unused, error) ->
+            CompletableFuture<Void> future = core.scheduler().runIo(() -> database.save(snapshot, name));
+            saveFutures.put(playerId, future);
+            future.whenComplete((unused, error) ->
                     core.scheduler().runPrimary(() -> {
+                        saveFutures.remove(playerId, future);
                         saving.remove(playerId);
                         if (error != null) {
                             logger.log(Level.SEVERE, "Failed to save PlexonJobs profile " + playerId, error);
@@ -123,6 +146,7 @@ public final class ProfileManager {
                         }
                     }));
         } catch (RuntimeException failure) {
+            saveFutures.remove(playerId);
             saving.remove(playerId);
             throw failure;
         }
