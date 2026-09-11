@@ -7,10 +7,12 @@ import com.plexon.jobs.util.Money;
 import org.bukkit.GameMode;
 import org.bukkit.Material;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -33,6 +35,11 @@ public final class ConfigLoader {
         saveIfMissing("jobs.yml");
         saveIfMissing("messages.yml");
         saveIfMissing("migration.yml");
+
+        // Bukkit's reloadConfig path can recover from malformed YAML with fallback/default state.
+        // Validate the candidate file first so a reload cannot silently replace the accepted runtime.
+        File configFile = new File(plugin.getDataFolder(), "config.yml");
+        loadStrict(configFile, "config.yml");
         plugin.reloadConfig();
 
         ConfigurationSection cfg = plugin.getConfig();
@@ -67,7 +74,7 @@ public final class ConfigLoader {
         );
 
         File jobsFile = new File(plugin.getDataFolder(), "jobs.yml");
-        YamlConfiguration jobsYaml = YamlConfiguration.loadConfiguration(jobsFile);
+        YamlConfiguration jobsYaml = loadStrict(jobsFile, "jobs.yml");
         ConfigurationSection jobs = jobsYaml.getConfigurationSection("jobs");
         if (jobs == null) throw new IllegalStateException("jobs.yml has no jobs map");
 
@@ -108,6 +115,16 @@ public final class ConfigLoader {
         }
         if (definitions.isEmpty()) throw new IllegalStateException("jobs.yml must define at least one job");
         return new Loaded(jobsConfig, List.copyOf(definitions));
+    }
+
+    static YamlConfiguration loadStrict(File file, String label) {
+        YamlConfiguration yaml = new YamlConfiguration();
+        try {
+            yaml.load(file);
+            return yaml;
+        } catch (IOException | InvalidConfigurationException failure) {
+            throw new IllegalArgumentException("Invalid YAML in " + label + "; current runtime remains unchanged", failure);
+        }
     }
 
     private void saveIfMissing(String name) {
