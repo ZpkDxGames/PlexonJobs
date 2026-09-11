@@ -10,6 +10,8 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 public final class JobsDatabase {
@@ -149,25 +151,48 @@ public final class JobsDatabase {
     }
 
     public void addShadow(UUID playerId, String jobId, long moneyMinor, long xp, long eventCount) {
-        try (Connection connection = open();
-             PreparedStatement ps = connection.prepareStatement("""
-                 INSERT INTO shadow_totals(player_uuid,job_id,money_units,xp_units,event_count,updated_at)
-                 VALUES(?,?,?,?,?,?)
-                 ON CONFLICT(player_uuid,job_id) DO UPDATE SET
-                   money_units=shadow_totals.money_units+excluded.money_units,
-                   xp_units=shadow_totals.xp_units+excluded.xp_units,
-                   event_count=shadow_totals.event_count+excluded.event_count,
-                   updated_at=excluded.updated_at
-                 """)) {
-            ps.setString(1, playerId.toString());
-            ps.setString(2, jobId);
-            ps.setLong(3, moneyMinor);
-            ps.setLong(4, xp);
-            ps.setLong(5, eventCount);
-            ps.setLong(6, System.currentTimeMillis());
-            ps.executeUpdate();
+        addShadowBatch(List.of(new ShadowDelta(playerId, jobId, moneyMinor, xp, eventCount)));
+    }
+
+    /**
+     * Persists one drained shadow-ledger batch as a single SQLite transaction. Callers may safely
+     * requeue the entire batch after failure because no prefix can be committed independently.
+     */
+    public void addShadowBatch(Iterable<ShadowDelta> deltas) {
+        Objects.requireNonNull(deltas, "deltas");
+        String sql = """
+                INSERT INTO shadow_totals(player_uuid,job_id,money_units,xp_units,event_count,updated_at)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(player_uuid,job_id) DO UPDATE SET
+                  money_units=shadow_totals.money_units+excluded.money_units,
+                  xp_units=shadow_totals.xp_units+excluded.xp_units,
+                  event_count=shadow_totals.event_count+excluded.event_count,
+                  updated_at=excluded.updated_at
+                """;
+        try (Connection connection = open()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                long now = System.currentTimeMillis();
+                for (ShadowDelta delta : deltas) {
+                    Objects.requireNonNull(delta, "shadow delta");
+                    ps.setString(1, Objects.requireNonNull(delta.playerId(), "playerId").toString());
+                    ps.setString(2, Objects.requireNonNull(delta.jobId(), "jobId"));
+                    ps.setLong(3, delta.moneyMinor());
+                    ps.setLong(4, delta.xp());
+                    ps.setLong(5, delta.eventCount());
+                    ps.setLong(6, now);
+                    ps.addBatch();
+                }
+                ps.executeBatch();
+                connection.commit();
+            } catch (Exception ex) {
+                connection.rollback();
+                throw ex;
+            } finally {
+                connection.setAutoCommit(true);
+            }
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to write shadow aggregate", ex);
+            throw new IllegalStateException("Failed to write shadow aggregate batch", ex);
         }
     }
 
@@ -207,5 +232,6 @@ public final class JobsDatabase {
         return DriverManager.getConnection("jdbc:sqlite:" + dbPath.toAbsolutePath());
     }
 
+    public record ShadowDelta(UUID playerId, String jobId, long moneyMinor, long xp, long eventCount) {}
     public record ShadowRow(long moneyMinor, long xp, long events) {}
 }
