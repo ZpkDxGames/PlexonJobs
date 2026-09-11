@@ -39,7 +39,7 @@ public final class ConfigLoader {
         // Bukkit's reloadConfig path can recover from malformed YAML with fallback/default state.
         // Validate the candidate file first so a reload cannot silently replace the accepted runtime.
         File configFile = new File(plugin.getDataFolder(), "config.yml");
-        loadStrict(configFile, "config.yml");
+        validateYaml(configFile, "config.yml");
         plugin.reloadConfig();
 
         ConfigurationSection cfg = plugin.getConfig();
@@ -74,7 +74,8 @@ public final class ConfigLoader {
         );
 
         File jobsFile = new File(plugin.getDataFolder(), "jobs.yml");
-        YamlConfiguration jobsYaml = loadStrict(jobsFile, "jobs.yml");
+        validateYaml(jobsFile, "jobs.yml");
+        YamlConfiguration jobsYaml = YamlConfiguration.loadConfiguration(jobsFile);
         ConfigurationSection jobs = jobsYaml.getConfigurationSection("jobs");
         if (jobs == null) throw new IllegalStateException("jobs.yml has no jobs map");
 
@@ -117,11 +118,10 @@ public final class ConfigLoader {
         return new Loaded(jobsConfig, List.copyOf(definitions));
     }
 
-    static YamlConfiguration loadStrict(File file, String label) {
+    static void validateYaml(File file, String label) {
         YamlConfiguration yaml = new YamlConfiguration();
         try {
             yaml.load(file);
-            return yaml;
         } catch (IOException | InvalidConfigurationException failure) {
             throw new IllegalArgumentException("Invalid YAML in " + label + "; current runtime remains unchanged", failure);
         }
