@@ -37,6 +37,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
 public final class PlexonJobs extends JavaPlugin {
@@ -47,6 +49,7 @@ public final class PlexonJobs extends JavaPlugin {
     private final PendingPayoutLedger pendingLedger = new PendingPayoutLedger();
     private final ShadowLedger shadow = new ShadowLedger();
     private final JobsMetrics metrics = new JobsMetrics();
+    private final Set<CompletableFuture<Void>> shadowWrites = ConcurrentHashMap.newKeySet();
     private JobsEconomy economy;
     private volatile PayoutService payouts;
     private volatile JobsRuntime runtime;
@@ -96,6 +99,7 @@ public final class PlexonJobs extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        // Stop every producer before establishing the final persistence barriers.
         cancelTasks();
         closeBlockSubscription();
         unregisterExpansion();
@@ -105,6 +109,7 @@ public final class PlexonJobs extends JavaPlugin {
                 if (committed == 0) break;
             }
         }
+        awaitShadowWrites();
         flushShadowBlocking();
         if (profiles != null) profiles.saveAllBlocking();
         Bukkit.getServicesManager().unregisterAll(this);
@@ -280,21 +285,52 @@ public final class PlexonJobs extends JavaPlugin {
     private void flushShadowAsync() {
         var batch = shadow.drain();
         if (batch.isEmpty()) return;
-        core.scheduler().runIo(() -> batch.forEach((key, total) -> database.addShadow(key.playerId(), key.jobId(), total.moneyMinor(), total.xp(), total.events())))
-                .whenComplete((unused, error) -> {
-                    if (error != null) {
-                        batch.forEach((key, total) -> shadow.addAggregate(key.playerId(), key.jobId(), total.moneyMinor(), total.xp(), total.events()));
-                        getLogger().log(Level.SEVERE, "Failed to persist shadow aggregate; batch returned to memory", error);
-                    }
-                });
+        List<JobsDatabase.ShadowDelta> deltas = shadowDeltas(batch);
+        try {
+            CompletableFuture<Void> io = core.scheduler().runIo(() -> database.addShadowBatch(deltas));
+            CompletableFuture<Void> settled = io.handle((unused, error) -> {
+                if (error != null) {
+                    restoreShadowBatch(batch);
+                    getLogger().log(Level.SEVERE, "Failed to persist atomic shadow aggregate batch; batch returned to memory", error);
+                }
+                return null;
+            });
+            shadowWrites.add(settled);
+            settled.whenComplete((unused, error) -> shadowWrites.remove(settled));
+        } catch (RuntimeException failure) {
+            restoreShadowBatch(batch);
+            getLogger().log(Level.SEVERE, "Failed to schedule shadow aggregate persistence; batch returned to memory", failure);
+        }
+    }
+
+    private void awaitShadowWrites() {
+        List<CompletableFuture<Void>> inFlight = List.copyOf(shadowWrites);
+        if (inFlight.isEmpty()) return;
+        CompletableFuture.allOf(inFlight.toArray(CompletableFuture[]::new)).join();
     }
 
     private void flushShadowBlocking() {
         var batch = shadow.drain();
-        batch.forEach((key, total) -> {
-            try { database.addShadow(key.playerId(), key.jobId(), total.moneyMinor(), total.xp(), total.events()); }
-            catch (RuntimeException failure) { getLogger().log(Level.SEVERE, "Failed to persist shutdown shadow totals for " + key.playerId(), failure); }
-        });
+        if (batch.isEmpty()) return;
+        try {
+            database.addShadowBatch(shadowDeltas(batch));
+        } catch (RuntimeException failure) {
+            restoreShadowBatch(batch);
+            getLogger().log(Level.SEVERE, "Failed to persist shutdown shadow aggregate batch", failure);
+        }
+    }
+
+    private List<JobsDatabase.ShadowDelta> shadowDeltas(java.util.Map<ShadowLedger.Key, ShadowLedger.Snapshot> batch) {
+        return batch.entrySet().stream()
+                .map(entry -> new JobsDatabase.ShadowDelta(
+                        entry.getKey().playerId(), entry.getKey().jobId(),
+                        entry.getValue().moneyMinor(), entry.getValue().xp(), entry.getValue().events()))
+                .toList();
+    }
+
+    private void restoreShadowBatch(java.util.Map<ShadowLedger.Key, ShadowLedger.Snapshot> batch) {
+        batch.forEach((key, total) -> shadow.addAggregate(
+                key.playerId(), key.jobId(), total.moneyMinor(), total.xp(), total.events()));
     }
 
     private void cancelTasks() {
