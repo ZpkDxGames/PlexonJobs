@@ -5,15 +5,26 @@ on:
     branches: ['**']
     tags-ignore: ['v*']
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  ACCEPTED_RC2_SHA: '4929145d2e594fef5714319b8f668076fc66498a'
+  ROLLBACK_TAG: 'v1.0.0-rc.2'
+  ROLLBACK_SHA: '4929145d2e594fef5714319b8f668076fc66498a'
+  ROLLBACK_JAR_SHA256: '082334093b8b9e98afe31593dd4585eb0138ffae730cd1e91e1449cf658f22f6'
+  CORE_VERSION: '2.0.4'
+  CORE_SHA256: '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
+
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Checkout
+      - name: Checkout exact source
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -29,86 +40,138 @@ jobs:
         with:
           gradle-version: '9.1.0'
 
-      - name: Provision exact PlexonCore 2.0.4 API
+      - name: Provision verified PlexonCore API
         shell: bash
         run: |
           set -euo pipefail
-          core_jar="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"
-          curl --fail --location --silent --show-error --output "${core_jar}" \
-            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar"
-          echo "61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  ${core_jar}" | sha256sum --check
+          core_jar="${RUNNER_TEMP}/PlexonCore-${CORE_VERSION}.jar"
+          curl --fail --location --retry 3 --silent --show-error --output "$core_jar" \
+            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v${CORE_VERSION}/PlexonCore-${CORE_VERSION}.jar"
+          echo "${CORE_SHA256}  ${core_jar}" | sha256sum --check
           mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
-            -Dfile="${core_jar}" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
+            -Dfile="$core_jar" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
+            -Dversion="$CORE_VERSION" -Dpackaging=jar -DgeneratePom=true
 
-      - name: Test, document and package
+      - name: Resolve version and prove accepted lineage
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(gradle -q properties | awk '$1 == "version:" {print $2; exit}')"
+          test -n "$VERSION"
+          [[ "$VERSION" != *-* ]] || { echo "Stable source version must not have a prerelease suffix: $VERSION" >&2; exit 1; }
+          test "$VERSION" = '1.0.0'
+          git merge-base --is-ancestor "$ACCEPTED_RC2_SHA" HEAD
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Full source verification
         run: gradle --no-daemon clean test check javadoc shadowJar verifyDistribution --stacktrace
 
-      - name: Generate test and provenance evidence
+      - name: Build exact test summary
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import glob, xml.etree.ElementTree as ET
+          import glob, pathlib, xml.etree.ElementTree as ET
           totals = dict(tests=0, failures=0, errors=0, skipped=0)
-          files = glob.glob('build/test-results/test/TEST-*.xml')
-          if not files:
-              raise SystemExit('no JUnit XML test results found')
-          for path in files:
+          paths = sorted(glob.glob('build/test-results/test/TEST-*.xml'))
+          if not paths:
+              raise SystemExit('No JUnit XML test results found')
+          for path in paths:
               root = ET.parse(path).getroot()
               for key in totals:
                   totals[key] += int(root.attrib.get(key, 0))
-          with open('build/TEST_SUMMARY.txt', 'w', encoding='utf-8') as out:
-              out.write(f"executed={totals['tests']}\nfailures={totals['failures']}\nerrors={totals['errors']}\nskipped={totals['skipped']}\n")
-          if totals['failures'] or totals['errors']:
-              raise SystemExit('test summary contains failures/errors')
+          if totals['tests'] <= 0:
+              raise SystemExit('No tests executed')
+          if totals['failures'] or totals['errors'] or totals['skipped']:
+              raise SystemExit(f'Non-clean test totals: {totals}')
+          pathlib.Path('build/TEST_SUMMARY.txt').write_text(
+              f"TEST_COUNT={totals['tests']} FAILURES={totals['failures']} ERRORS={totals['errors']} SKIPPED={totals['skipped']}\n",
+              encoding='utf-8')
+          print(totals)
           PY
-          cat > build/PROVENANCE.txt <<EOF
-          repository=ZpkDxGames/PlexonJobs
-          version=1.0.0
-          candidate_sha=${GITHUB_SHA}
-          rollback_tag=v1.0.0-rc.1
-          rollback_sha=e209dbc6e744882ae6cd5fd2426302f07f647010
-          java=25
-          paper=26.2.build.121-stable
-          plexoncore=2.0.4
-          vault_api=1.7
-          economy_authority=TheosisEconomy via Vault
-          schema_version=2
-          runtime_certification=NOT_EXECUTED
-          EOF
 
-      - name: Verify distribution contract
+      - name: Verify stable distribution
         shell: bash
         run: |
           set -euo pipefail
-          jar_path='build/libs/PlexonJobs-1.0.0.jar'
-          test -s "${jar_path}"
-          jar tf "${jar_path}" > build/jar-contents.txt
-          grep -qx 'plugin.yml' build/jar-contents.txt
-          grep -qx 'com/plexon/jobs/PlexonJobs.class' build/jar-contents.txt
-          grep -qx 'com/plexon/jobs/api/PlexonJobsAPI.class' build/jar-contents.txt
-          grep -qx 'org/sqlite/JDBC.class' build/jar-contents.txt
+          JAR="build/libs/PlexonJobs-${VERSION}.jar"
+          test -s "$JAR"
+          jar tf "$JAR" > build/jar-contents.txt
+          for required in \
+            plugin.yml \
+            com/plexon/jobs/PlexonJobs.class \
+            com/plexon/jobs/api/PlexonJobsAPI.class \
+            com/plexon/jobs/event/PlexonJobPayoutCommittedEvent.class \
+            org/sqlite/JDBC.class; do
+            grep -qx "$required" build/jar-contents.txt
+          done
+          unzip -p "$JAR" plugin.yml | sed -n 's/^version:[[:space:]]*//p' | head -n 1 | tr -d " '\"\r" | grep -qx "$VERSION"
+          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -Fx "Implementation-Version: $VERSION"
+          javap -verbose -classpath "$JAR" com.plexon.jobs.PlexonJobs | grep -F 'major version: 69'
           for forbidden in 'com/zpkdxgames/plexoncore/' 'io/papermc/paper/' 'org/bukkit/' 'net/kyori/adventure/' 'net/milkbowl/vault/' 'me/clip/placeholderapi/'; do
             if grep -q "^${forbidden}" build/jar-contents.txt; then
-              echo "Forbidden runtime API shaded into PlexonJobs: ${forbidden}" >&2
+              echo "Compile-only runtime API shaded into PlexonJobs: ${forbidden}" >&2
               exit 1
             fi
           done
-          unzip -p "${jar_path}" plugin.yml | sed -n 's/^version:[[:space:]]*//p' | head -n 1 | tr -d " '\"\r" | grep -qx '1.0.0'
-          javap -verbose -classpath "${jar_path}" com.plexon.jobs.PlexonJobs | grep -q 'major version: 69'
-          sha256sum "${jar_path}" | sed 's#build/libs/##' > build/SHA256SUMS.txt
+          (cd build/libs && sha256sum "PlexonJobs-${VERSION}.jar" > ../SHA256SUMS.txt)
           (cd build/libs && sha256sum --check ../SHA256SUMS.txt)
 
-      - name: Check whitespace
-        run: git diff --check
+      - name: Write exact provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR="build/libs/PlexonJobs-${VERSION}.jar"
+          digest="$(sha256sum "$JAR" | awk '{print $1}')"
+          size="$(stat -c%s "$JAR")"
+          cat > build/PROVENANCE.txt <<EOF
+          repository=$GITHUB_REPOSITORY
+          source_sha=$GITHUB_SHA
+          accepted_rc2=$ACCEPTED_RC2_SHA
+          version=$VERSION
+          java=25
+          java_major=69
+          paper=26.2.build.121-stable
+          plexoncore=$CORE_VERSION
+          plexoncore_sha256=$CORE_SHA256
+          vault_api=1.7
+          economy_authority=TheosisEconomy via Vault
+          schema_version=2
+          rollback_tag=$ROLLBACK_TAG
+          rollback_sha=$ROLLBACK_SHA
+          rollback_jar_sha256=$ROLLBACK_JAR_SHA256
+          profile_shutdown_write_barrier=PASS
+          shadow_atomic_batch_persistence=PASS
+          shadow_shutdown_write_barrier=PASS
+          malformed_yaml_reload_fail_closed=PASS
+          cross_process_vault_exactly_once=NOT_CLAIMED
+          jar_size=$size
+          jar_sha256=$digest
+          runtime_certification=NOT_EXECUTED
+          EOF
 
-      - name: Upload verified evidence
+      - name: Check source whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$(git merge-base HEAD origin/main)" HEAD
+
+      - name: Upload verified build
         uses: actions/upload-artifact@v4
         with:
-          name: PlexonJobs-1.0.0-${{ github.sha }}
+          name: PlexonJobs-${{ steps.meta.outputs.version }}-${{ github.sha }}
           path: |
-            build/libs/PlexonJobs-1.0.0.jar
+            build/libs/PlexonJobs-${{ steps.meta.outputs.version }}.jar
             build/SHA256SUMS.txt
             build/TEST_SUMMARY.txt
             build/PROVENANCE.txt
           if-no-files-found: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.sha }}
+          path: build/test-results/test/
