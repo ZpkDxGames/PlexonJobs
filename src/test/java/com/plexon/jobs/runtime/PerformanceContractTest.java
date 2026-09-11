@@ -47,4 +47,28 @@ class PerformanceContractTest {
         assertFalse(plugin.contains("batch.forEach((key, total) -> database.addShadow"),
                 "A drained shadow batch must never be persisted as independently committed rows");
     }
+
+    @Test void yamlReloadValidationFailsClosedBeforeBukkitRuntimeMutation() throws Exception {
+        String source = Files.readString(Path.of("src/main/java/com/plexon/jobs/config/ConfigLoader.java"));
+
+        int configFile = source.indexOf("File configFile = new File(plugin.getDataFolder(), \"config.yml\")");
+        int validateConfig = source.indexOf("validateYaml(configFile, \"config.yml\")", configFile);
+        int reloadConfig = source.indexOf("plugin.reloadConfig();", validateConfig);
+        assertTrue(configFile >= 0 && validateConfig > configFile && reloadConfig > validateConfig,
+                "config.yml must be strictly parsed before Bukkit reloadConfig can mutate live configuration");
+
+        int jobsFile = source.indexOf("File jobsFile = new File(plugin.getDataFolder(), \"jobs.yml\")");
+        int validateJobs = source.indexOf("validateYaml(jobsFile, \"jobs.yml\")", jobsFile);
+        int loadJobs = source.indexOf("YamlConfiguration.loadConfiguration(jobsFile)", validateJobs);
+        assertTrue(jobsFile >= 0 && validateJobs > jobsFile && loadJobs > validateJobs,
+                "jobs.yml must be strictly parsed before normal configuration loading");
+
+        int helper = source.indexOf("static void validateYaml(File file, String label)");
+        int strictLoad = source.indexOf("yaml.load(file);", helper);
+        int invalidYamlCatch = source.indexOf("InvalidConfigurationException", helper);
+        assertTrue(helper >= 0 && strictLoad > helper && invalidYamlCatch > helper,
+                "strict YAML validation must perform a throwing parse and handle invalid YAML explicitly");
+        assertTrue(source.contains("current runtime remains unchanged"),
+                "reload rejection must document that the accepted runtime remains authoritative");
+    }
 }
