@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -40,5 +41,22 @@ class JobsDatabaseTest {
         assertEquals(340, row.moneyMinor());
         assertEquals(17, row.xp());
         assertEquals(17, row.events());
+    }
+
+    @Test void failedShadowBatchCannotCommitSuccessfulPrefix() {
+        JobsDatabase database = new JobsDatabase(temp.resolve("shadow-atomic.db"));
+        database.initialize();
+        UUID id = UUID.randomUUID();
+        database.addShadow(id, "miner", 50, 5, 1);
+
+        List<JobsDatabase.ShadowDelta> batch = List.of(
+                new JobsDatabase.ShadowDelta(id, "miner", 100, 10, 2),
+                new JobsDatabase.ShadowDelta(id, null, 999, 999, 9));
+
+        assertThrows(IllegalStateException.class, () -> database.addShadowBatch(batch));
+        var row = database.shadow(id, "miner");
+        assertEquals(50, row.moneyMinor(), "Failed atomic batch must not retain an earlier successful prefix");
+        assertEquals(5, row.xp());
+        assertEquals(1, row.events());
     }
 }
