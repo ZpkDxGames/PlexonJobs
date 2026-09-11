@@ -1,18 +1,23 @@
-# PlexonJobs 1.0.0 Release Candidate
+# PlexonJobs 1.0.0 RC2
 
-This build is **candidate-ready**, not the stable `v1.0.0` release.
+RC2 supersedes RC1 after the Phase 2 source audit found release-blocking runtime-contract gaps. This remains a prerelease and is not the stable `v1.0.0` publication.
 
-## Included
+## RC2 hardening
 
-- PlexonCore API 2.x module registration and shared block-break routing.
-- Core-native Miner, Woodcutter, and Digger break activities using authoritative natural/player-placed provenance.
-- Twelve built-in job definitions; activity families not yet exposed by the shared Core runtime remain disabled rather than registering duplicate Bukkit listeners.
-- Exact fixed-point money units and coalesced Vault payouts with pending/in-flight state and bounded retry gates.
-- Player membership, total job XP, derived levels, daily caps, SQLite/WAL persistence, public API/events, PlaceholderAPI, GUI browser, diagnostics, SHADOW mode, and migration scan/plan tooling.
-- Reproducible Java 25 / Paper 26.2 build and distribution verification.
+- Removes the immediate/per-work-event Vault flush path; payouts are coalesced only.
+- Pins build provenance to PlexonCore 2.0.4 and uses owner-aware Core module state/teardown semantics.
+- Adds strict configuration typing/ranges and rejects unsupported payout modes.
+- Adds SQLite schema version 2 with future-schema fail-closed behavior.
+- Fixes persisted SHADOW `event_count` aggregation.
+- Adds generation-bound profile loads and one in-flight asynchronous save per player.
+- Makes PlaceholderAPI lookups cache/index based, including constant-time total daily earnings.
+- Adds bounded non-granting simulation, richer diagnostics, 100,000-action deterministic load coverage and source-level performance contracts.
+- Release evidence now includes SHA256SUMS, TEST_SUMMARY and PROVENANCE.
 
-## Stable-release blockers
+## Preserved product boundary
 
-The specification requires real server evidence before `v1.0.0`: legacy Jobs migration dry-run/execute on a staging backup, SHADOW comparison, PRIMARY staging, economy-rate review, Spark comparison, multi-player load testing, 30-minute soak testing, and rollback validation. Those results cannot be fabricated by CI.
+Miner, Woodcutter and Digger use the shared Core block-break/provenance gateway. Job families lacking authoritative shared event contexts remain disabled instead of registering duplicate high-frequency Bukkit listeners. TheosisEconomy remains authoritative through Vault.
 
-The candidate defaults to `SHADOW` and does not make Vault deposits or mutate live job XP from activities until an administrator deliberately selects `PRIMARY` after validation.
+## Stable blockers
+
+Stable `v1.0.0` requires real PlexonCraft runtime certification: actual previous-state migration, Jobs Reborn import rehearsal where supported, Core/Vault/Theosis startup and failure recovery, player flows, provenance/anti-exploit cases, reload/restart behavior, cross-plugin interoperability, representative Spark profiling, and a >=30-minute soak. None of those runtime results are inferred from CI.

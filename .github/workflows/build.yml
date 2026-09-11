@@ -29,25 +29,53 @@ jobs:
         with:
           gradle-version: '9.1.0'
 
-      - name: Provision exact PlexonCore 2.0.2 API
+      - name: Provision exact PlexonCore 2.0.4 API
         shell: bash
         run: |
           set -euo pipefail
-          core_jar="${RUNNER_TEMP}/PlexonCore-2.0.2.jar"
-          curl --fail --location --silent --show-error \
-            --output "${core_jar}" \
-            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.2/PlexonCore-2.0.2.jar"
-          echo "7e096ada4293017203cd4e01cb93761d169fa4c756fc46af520b2aed11a10ef5  ${core_jar}" | sha256sum --check
+          core_jar="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"
+          curl --fail --location --silent --show-error --output "${core_jar}" \
+            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar"
+          echo "61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  ${core_jar}" | sha256sum --check
           mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
-            -Dfile="${core_jar}" \
-            -DgroupId=com.zpkdxgames \
-            -DartifactId=PlexonCore \
-            -Dversion=2.0.2 \
-            -Dpackaging=jar \
-            -DgeneratePom=true
+            -Dfile="${core_jar}" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
 
       - name: Test, document and package
         run: gradle --no-daemon clean test check javadoc shadowJar verifyDistribution --stacktrace
+
+      - name: Generate test and provenance evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          totals = dict(tests=0, failures=0, errors=0, skipped=0)
+          files = glob.glob('build/test-results/test/TEST-*.xml')
+          if not files:
+              raise SystemExit('no JUnit XML test results found')
+          for path in files:
+              root = ET.parse(path).getroot()
+              for key in totals:
+                  totals[key] += int(root.attrib.get(key, 0))
+          with open('build/TEST_SUMMARY.txt', 'w', encoding='utf-8') as out:
+              out.write(f"executed={totals['tests']}\nfailures={totals['failures']}\nerrors={totals['errors']}\nskipped={totals['skipped']}\n")
+          if totals['failures'] or totals['errors']:
+              raise SystemExit('test summary contains failures/errors')
+          PY
+          cat > build/PROVENANCE.txt <<EOF
+          repository=ZpkDxGames/PlexonJobs
+          version=1.0.0
+          candidate_sha=${GITHUB_SHA}
+          rollback_tag=v1.0.0-rc.1
+          rollback_sha=e209dbc6e744882ae6cd5fd2426302f07f647010
+          java=25
+          paper=26.2.build.121-stable
+          plexoncore=2.0.4
+          vault_api=1.7
+          economy_authority=TheosisEconomy via Vault
+          schema_version=2
+          runtime_certification=NOT_EXECUTED
+          EOF
 
       - name: Verify distribution contract
         shell: bash
@@ -60,10 +88,12 @@ jobs:
           grep -qx 'com/plexon/jobs/PlexonJobs.class' build/jar-contents.txt
           grep -qx 'com/plexon/jobs/api/PlexonJobsAPI.class' build/jar-contents.txt
           grep -qx 'org/sqlite/JDBC.class' build/jar-contents.txt
-          if grep -q '^com/zpkdxgames/plexoncore/' build/jar-contents.txt; then
-            echo 'PlexonCore runtime classes must not be shaded into PlexonJobs' >&2
-            exit 1
-          fi
+          for forbidden in 'com/zpkdxgames/plexoncore/' 'io/papermc/paper/' 'org/bukkit/' 'net/kyori/adventure/' 'net/milkbowl/vault/' 'me/clip/placeholderapi/'; do
+            if grep -q "^${forbidden}" build/jar-contents.txt; then
+              echo "Forbidden runtime API shaded into PlexonJobs: ${forbidden}" >&2
+              exit 1
+            fi
+          done
           unzip -p "${jar_path}" plugin.yml | sed -n 's/^version:[[:space:]]*//p' | head -n 1 | tr -d " '\"\r" | grep -qx '1.0.0'
           javap -verbose -classpath "${jar_path}" com.plexon.jobs.PlexonJobs | grep -q 'major version: 69'
           sha256sum "${jar_path}" | sed 's#build/libs/##' > build/SHA256SUMS.txt
@@ -72,11 +102,13 @@ jobs:
       - name: Check whitespace
         run: git diff --check
 
-      - name: Upload verified artifact
+      - name: Upload verified evidence
         uses: actions/upload-artifact@v4
         with:
           name: PlexonJobs-1.0.0-${{ github.sha }}
           path: |
             build/libs/PlexonJobs-1.0.0.jar
             build/SHA256SUMS.txt
+            build/TEST_SUMMARY.txt
+            build/PROVENANCE.txt
           if-no-files-found: error

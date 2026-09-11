@@ -13,6 +13,7 @@ import java.sql.Statement;
 import java.util.UUID;
 
 public final class JobsDatabase {
+    public static final int SCHEMA_VERSION = 2;
     private final Path dbPath;
 
     public JobsDatabase(Path dbPath) {
@@ -28,6 +29,12 @@ public final class JobsDatabase {
             try (Connection connection = open(); Statement statement = connection.createStatement()) {
                 statement.execute("PRAGMA journal_mode=WAL");
                 statement.execute("PRAGMA synchronous=NORMAL");
+                statement.execute("CREATE TABLE IF NOT EXISTS migration_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
+                Integer current = readSchemaVersion(connection);
+                if (current != null && current > SCHEMA_VERSION) {
+                    throw new IllegalStateException("Database schema " + current + " is newer than supported schema " + SCHEMA_VERSION);
+                }
+                if (current != null && current < 1) throw new IllegalStateException("Invalid PlexonJobs schema version " + current);
                 statement.execute("""
                     CREATE TABLE IF NOT EXISTS players(
                       player_uuid TEXT PRIMARY KEY,
@@ -57,12 +64,6 @@ public final class JobsDatabase {
                     )
                     """);
                 statement.execute("""
-                    CREATE TABLE IF NOT EXISTS migration_meta(
-                      key TEXT PRIMARY KEY,
-                      value TEXT NOT NULL
-                    )
-                    """);
-                statement.execute("""
                     CREATE TABLE IF NOT EXISTS shadow_totals(
                       player_uuid TEXT NOT NULL,
                       job_id TEXT NOT NULL,
@@ -73,9 +74,20 @@ public final class JobsDatabase {
                       PRIMARY KEY(player_uuid, job_id)
                     )
                     """);
+                writeSchemaVersion(connection, SCHEMA_VERSION);
             }
         } catch (Exception ex) {
+            if (ex instanceof IllegalStateException state) throw state;
             throw new IllegalStateException("Failed to initialize PlexonJobs database", ex);
+        }
+    }
+
+    public int schemaVersion() {
+        try (Connection connection = open()) {
+            Integer version = readSchemaVersion(connection);
+            return version == null ? 0 : version;
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to read PlexonJobs schema version", ex);
         }
     }
 
@@ -87,8 +99,7 @@ public final class JobsDatabase {
             ps.setString(1, playerId.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    profile.put(rs.getString(1),
-                            new JobProgress(rs.getLong(3), rs.getInt(4), rs.getInt(2) != 0));
+                    profile.put(rs.getString(1), new JobProgress(rs.getLong(3), rs.getInt(4), rs.getInt(2) != 0));
                 }
             }
             return profile;
@@ -114,7 +125,6 @@ public final class JobsDatabase {
                 player.setString(2, lastName == null ? "" : lastName);
                 player.setLong(3, now);
                 player.executeUpdate();
-
                 for (var entry : profile.jobs().entrySet()) {
                     PlayerJobsProfile.ProgressSnapshot progress = entry.getValue();
                     job.setString(1, profile.playerId().toString());
@@ -146,7 +156,7 @@ public final class JobsDatabase {
                  ON CONFLICT(player_uuid,job_id) DO UPDATE SET
                    money_units=shadow_totals.money_units+excluded.money_units,
                    xp_units=shadow_totals.xp_units+excluded.xp_units,
-                   event_count=shadow_totals.event_count+1,
+                   event_count=shadow_totals.event_count+excluded.event_count,
                    updated_at=excluded.updated_at
                  """)) {
             ps.setString(1, playerId.toString());
@@ -161,7 +171,41 @@ public final class JobsDatabase {
         }
     }
 
+    public ShadowRow shadow(UUID playerId, String jobId) {
+        try (Connection connection = open(); PreparedStatement ps = connection.prepareStatement(
+                "SELECT money_units,xp_units,event_count FROM shadow_totals WHERE player_uuid=? AND job_id=?")) {
+            ps.setString(1, playerId.toString());
+            ps.setString(2, jobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? new ShadowRow(rs.getLong(1), rs.getLong(2), rs.getLong(3)) : new ShadowRow(0, 0, 0);
+            }
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to read shadow aggregate", ex);
+        }
+    }
+
+    private Integer readSchemaVersion(Connection connection) throws Exception {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT value FROM migration_meta WHERE key='schema_version'");
+             ResultSet rs = ps.executeQuery()) {
+            if (!rs.next()) return null;
+            try { return Integer.parseInt(rs.getString(1)); }
+            catch (NumberFormatException ex) { throw new IllegalStateException("Invalid schema_version value", ex); }
+        }
+    }
+
+    private void writeSchemaVersion(Connection connection, int version) throws Exception {
+        try (PreparedStatement ps = connection.prepareStatement("""
+                INSERT INTO migration_meta(key,value) VALUES('schema_version',?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """)) {
+            ps.setString(1, Integer.toString(version));
+            ps.executeUpdate();
+        }
+    }
+
     private Connection open() throws Exception {
         return DriverManager.getConnection("jdbc:sqlite:" + dbPath.toAbsolutePath());
     }
+
+    public record ShadowRow(long moneyMinor, long xp, long events) {}
 }

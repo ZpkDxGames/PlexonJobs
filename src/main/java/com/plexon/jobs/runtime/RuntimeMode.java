@@ -6,8 +6,7 @@ public enum RuntimeMode {
     PRIMARY;
 
     public static RuntimeMode parse(String value) {
-        if (value == null) return SHADOW;
-        try { return valueOf(value.trim().toUpperCase(java.util.Locale.ROOT)); }
-        catch (IllegalArgumentException ex) { return SHADOW; }
+        if (value == null || value.isBlank()) return SHADOW;
+        return valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
     }
 }

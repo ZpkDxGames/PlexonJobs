@@ -1,5 +1,6 @@
 package com.plexon.jobs.integration;
 
+import com.plexon.jobs.model.JobDefinition;
 import com.plexon.jobs.model.JobProgress;
 import com.plexon.jobs.model.PlayerJobsProfile;
 import com.plexon.jobs.runtime.DailyLimitService;
@@ -13,6 +14,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Locale;
 
 public final class PlexonJobsExpansion extends PlaceholderExpansion {
+    private static final String[] JOB_FIELDS = {"earned_today", "xp_next", "progress", "joined", "level", "xp"};
     private final JobsRuntime runtime;
     private final DailyLimitService limits;
 
@@ -35,14 +37,15 @@ public final class PlexonJobsExpansion extends PlaceholderExpansion {
         if (key.equals("active_count")) return Long.toString(profile.activeCount());
         if (key.equals("active_list")) return String.join(", ", profile.activeJobIds());
         if (key.equals("total_earned_today")) {
-            long total = runtime.registry().definitions().stream()
-                    .mapToLong(job -> limits.view(player.getUniqueId(), job.id()).moneyMinor()).sum();
-            return Money.format(total, runtime.config().moneyScale());
+            return Money.format(limits.total(player.getUniqueId()).moneyMinor(), runtime.config().moneyScale());
         }
-        for (var job : runtime.registry().definitions()) {
-            String prefix = job.id() + "_";
-            if (!key.startsWith(prefix)) continue;
-            String field = key.substring(prefix.length());
+
+        for (String field : JOB_FIELDS) {
+            String suffix = "_" + field;
+            if (!key.endsWith(suffix) || key.length() <= suffix.length()) continue;
+            String jobId = key.substring(0, key.length() - suffix.length());
+            JobDefinition job = runtime.registry().find(jobId).orElse(null);
+            if (job == null) return null;
             JobProgress progress = profile.jobs().get(job.id());
             long xp = progress == null ? 0 : progress.totalXp();
             int level = progress == null ? 1 : progress.level();

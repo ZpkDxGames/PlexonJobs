@@ -44,37 +44,60 @@ jobs:
         with:
           gradle-version: '9.1.0'
 
-      - name: Provision exact PlexonCore 2.0.2 API
+      - name: Provision exact PlexonCore 2.0.4 API
         shell: bash
         run: |
           set -euo pipefail
-          core_jar="${RUNNER_TEMP}/PlexonCore-2.0.2.jar"
+          core_jar="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"
           curl --fail --location --silent --show-error --output "${core_jar}" \
-            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.2/PlexonCore-2.0.2.jar"
-          echo "7e096ada4293017203cd4e01cb93761d169fa4c756fc46af520b2aed11a10ef5  ${core_jar}" | sha256sum --check
+            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar"
+          echo "61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  ${core_jar}" | sha256sum --check
           mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
-            -Dfile="${core_jar}" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.2 -Dpackaging=jar -DgeneratePom=true
+            -Dfile="${core_jar}" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
 
       - name: Build verified candidate
         run: gradle --no-daemon clean test check javadoc shadowJar verifyDistribution --stacktrace
 
-      - name: Checksum
+      - name: Generate immutable release evidence
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum build/libs/PlexonJobs-1.0.0.jar | sed 's#build/libs/##' > build/SHA256SUMS.txt
-          (cd build/libs && sha256sum --check ../SHA256SUMS.txt)
+          version=$(grep '^version = ' build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+          candidate="${GITHUB_REF_NAME#v}"
+          cp "build/libs/PlexonJobs-${version}.jar" "build/PlexonJobs-${candidate}.jar"
+          sha256sum "build/PlexonJobs-${candidate}.jar" | sed 's#build/##' > build/SHA256SUMS.txt
+          (cd build && sha256sum --check SHA256SUMS.txt)
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          t = dict(tests=0, failures=0, errors=0, skipped=0)
+          for p in glob.glob('build/test-results/test/TEST-*.xml'):
+              r = ET.parse(p).getroot()
+              for k in t: t[k] += int(r.attrib.get(k, 0))
+          with open('build/TEST_SUMMARY.txt','w',encoding='utf-8') as f:
+              f.write(f"executed={t['tests']}\nfailures={t['failures']}\nerrors={t['errors']}\nskipped={t['skipped']}\n")
+          PY
+          cat > build/PROVENANCE.txt <<EOF
+          repository=ZpkDxGames/PlexonJobs
+          version=1.0.0
+          candidate_sha=${GITHUB_SHA}
+          rollback_tag=v1.0.0-rc.1
+          rollback_sha=e209dbc6e744882ae6cd5fd2426302f07f647010
+          java=25
+          paper=26.2.build.121-stable
+          plexoncore=2.0.4
+          vault_api=1.7
+          economy_authority=TheosisEconomy via Vault
+          schema_version=2
+          runtime_certification=NOT_EXECUTED
+          EOF
 
       - name: Publish immutable prerelease
         shell: bash
         run: |
           set -euo pipefail
+          candidate="${GITHUB_REF_NAME#v}"
           gh release create "${GITHUB_REF_NAME}" \
-            build/libs/PlexonJobs-1.0.0.jar \
-            build/SHA256SUMS.txt \
-            --prerelease \
-            --verify-tag \
-            --title "PlexonJobs 1.0.0 Release Candidate" \
-            --notes-file RELEASE_CANDIDATE.md
+            "build/PlexonJobs-${candidate}.jar" build/SHA256SUMS.txt build/TEST_SUMMARY.txt build/PROVENANCE.txt \
+            --prerelease --verify-tag --title "PlexonJobs ${candidate}" --notes-file RELEASE_CANDIDATE.md
         env:
           GH_TOKEN: ${{ github.token }}

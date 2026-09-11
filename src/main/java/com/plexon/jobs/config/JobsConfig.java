@@ -3,7 +3,6 @@ package com.plexon.jobs.config;
 import com.plexon.jobs.runtime.RuntimeMode;
 
 import java.time.ZoneId;
-import java.util.Locale;
 import java.util.Set;
 
 public record JobsConfig(
@@ -11,7 +10,6 @@ public record JobsConfig(
         String coreApiRange,
         int defaultMaxJobs,
         boolean keepLevelOnLeave,
-        PayoutMode payoutMode,
         int payoutFlushTicks,
         int maxCommitsPerTick,
         int retryLimit,
@@ -22,11 +20,4 @@ public record JobsConfig(
         ZoneId resetZone,
         Set<String> allowedGameModes,
         Set<String> disabledWorlds
-) {
-    public enum PayoutMode { COALESCED, IMMEDIATE }
-
-    public static PayoutMode payoutMode(String raw) {
-        try { return PayoutMode.valueOf(raw.toUpperCase(Locale.ROOT)); }
-        catch (Exception ignored) { return PayoutMode.COALESCED; }
-    }
-}
+) {}

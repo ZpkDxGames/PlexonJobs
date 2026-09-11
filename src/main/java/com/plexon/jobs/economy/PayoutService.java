@@ -40,9 +40,10 @@ public final class PayoutService {
     public int flush(int maxPlayers) {
         if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Vault payouts must run on the primary thread");
         if (!economy.available()) return 0;
+        int limit = Math.max(1, maxPlayers);
         int committed = 0;
-        for (UUID playerId : ledger.readyPlayers(Math.max(1, maxPlayers) * 2)) {
-            if (committed >= maxPlayers) break;
+        for (UUID playerId : ledger.readyPlayers(limit * 2)) {
+            if (committed >= limit) break;
             if (blocked.contains(playerId)) continue;
             PendingPayoutLedger.Snapshot snapshot = ledger.begin(playerId);
             if (snapshot.empty()) continue;
@@ -71,6 +72,7 @@ public final class PayoutService {
                 }
             }
         }
+        metrics.payoutFlush(committed);
         return committed;
     }
 

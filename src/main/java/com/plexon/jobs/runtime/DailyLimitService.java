@@ -13,6 +13,7 @@ public final class DailyLimitService {
     private final long defaultXpCap;
     private LocalDate day;
     private final Map<Key, Counter> counters = new HashMap<>();
+    private final Map<UUID, Counter> playerTotals = new HashMap<>();
 
     public DailyLimitService(ZoneId zoneId, long defaultMoneyCap, long defaultXpCap) {
         this.zoneId = Objects.requireNonNull(zoneId);
@@ -34,14 +35,25 @@ public final class DailyLimitService {
 
     public synchronized void commit(UUID playerId, String jobId, long moneyMinor, long xp) {
         resetIfNeeded();
+        long money = Math.max(0, moneyMinor);
+        long experience = Math.max(0, xp);
         Counter current = counters.computeIfAbsent(new Key(playerId, jobId), ignored -> new Counter());
-        current.money = Math.addExact(current.money, Math.max(0, moneyMinor));
-        current.xp = Math.addExact(current.xp, Math.max(0, xp));
+        current.money = Math.addExact(current.money, money);
+        current.xp = Math.addExact(current.xp, experience);
+        Counter total = playerTotals.computeIfAbsent(playerId, ignored -> new Counter());
+        total.money = Math.addExact(total.money, money);
+        total.xp = Math.addExact(total.xp, experience);
     }
 
     public synchronized CounterView view(UUID playerId, String jobId) {
         resetIfNeeded();
         Counter c = counters.get(new Key(playerId, jobId));
+        return c == null ? new CounterView(0, 0) : new CounterView(c.money, c.xp);
+    }
+
+    public synchronized CounterView total(UUID playerId) {
+        resetIfNeeded();
+        Counter c = playerTotals.get(playerId);
         return c == null ? new CounterView(0, 0) : new CounterView(c.money, c.xp);
     }
 
@@ -51,6 +63,7 @@ public final class DailyLimitService {
         LocalDate now = LocalDate.now(zoneId);
         if (!now.equals(day)) {
             counters.clear();
+            playerTotals.clear();
             day = now;
         }
     }

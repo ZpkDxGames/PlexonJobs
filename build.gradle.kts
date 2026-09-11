@@ -18,7 +18,7 @@ java {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:26.2.build.121-stable")
-    compileOnly("com.zpkdxgames:PlexonCore:2.0.2")
+    compileOnly("com.zpkdxgames:PlexonCore:2.0.4")
     compileOnly("com.github.MilkBowl:VaultAPI:1.7") {
         exclude(group = "org.bukkit", module = "bukkit")
     }
@@ -84,7 +84,7 @@ val shadowJar by tasks.registering(Jar::class) {
 
 val verifyDistribution by tasks.registering {
     group = "verification"
-    description = "Verifies release JAR contents, shaded SQLite, and forbidden APIs."
+    description = "Verifies release JAR contents, shaded SQLite, and forbidden runtime APIs."
     dependsOn(shadowJar)
     inputs.file(shadowJar.flatMap { it.archiveFile })
 
@@ -109,6 +109,8 @@ val verifyDistribution by tasks.registering {
             val forbiddenPrefixes = listOf(
                 "com/zpkdxgames/plexoncore/",
                 "io/papermc/paper/",
+                "org/bukkit/",
+                "net/kyori/adventure/",
                 "net/milkbowl/vault/",
                 "me/clip/placeholderapi/"
             )
@@ -119,20 +121,11 @@ val verifyDistribution by tasks.registering {
             val entries = archive.entries()
             while (entries.hasMoreElements()) {
                 val entry = entries.nextElement()
-                if (!entry.isDirectory) {
-                    archive.getInputStream(entry).use { input ->
-                        input.transferTo(OutputStream.nullOutputStream())
-                    }
-                }
+                if (!entry.isDirectory) archive.getInputStream(entry).use { input -> input.transferTo(OutputStream.nullOutputStream()) }
             }
         }
     }
 }
 
-tasks.check {
-    dependsOn(verifyDistribution)
-}
-
-tasks.build {
-    dependsOn(shadowJar)
-}
+tasks.check { dependsOn(verifyDistribution) }
+tasks.build { dependsOn(shadowJar) }
