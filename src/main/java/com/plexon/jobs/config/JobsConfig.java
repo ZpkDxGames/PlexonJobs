@@ -19,5 +19,7 @@ public record JobsConfig(
         int saveIntervalTicks,
         ZoneId resetZone,
         Set<String> allowedGameModes,
-        Set<String> disabledWorlds
+        Set<String> disabledWorlds,
+        ActivityConfig activity,
+        FeedbackConfig feedback
 ) {}
