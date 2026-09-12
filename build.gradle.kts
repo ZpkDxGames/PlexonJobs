@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.plexon"
-version = "1.1.0"
+version = "2.0.0"
 
 val pluginVersion = version.toString()
 
@@ -97,6 +97,10 @@ val verifyDistribution by tasks.registering {
             "com/plexon/jobs/api/PlexonJobsAPI.class",
             "com/plexon/jobs/gui/JobsMenuHolder.class",
             "com/plexon/jobs/gui/JobsMenuController.class",
+            "com/plexon/jobs/runtime/ActivityGrantService.class",
+            "com/plexon/jobs/runtime/NativeActivityListener.class",
+            "com/plexon/jobs/runtime/ExplorerDiscoveryService.class",
+            "com/plexon/jobs/runtime/PlayerFeedbackService.class",
             "com/plexon/jobs/runtime/DailyLimitPersistence.class",
             "com/plexon/jobs/runtime/DailyLimitService.class",
             "com/plexon/jobs/event/PlexonJobJoinEvent.class",
@@ -105,6 +109,7 @@ val verifyDistribution by tasks.registering {
             "com/plexon/jobs/event/PlexonJobLevelUpEvent.class",
             "com/plexon/jobs/event/PlexonJobPayoutEvent.class",
             "com/plexon/jobs/event/PlexonJobPayoutCommittedEvent.class",
+            "com/plexon/jobs/event/PlexonJobRewardGrantedEvent.class",
             "org/sqlite/JDBC.class"
         )
         ZipFile(jarFile).use { archive ->
