@@ -92,6 +92,7 @@ public final class PlexonJobs extends JavaPlugin {
             AutoCloseable subscription = subscribeBlockBreaks(prepared.registry(), prepared.router());
             installPrepared(prepared);
             blockSubscription = subscription;
+            acceptProfileDefinitions(prepared);
 
             // The API contract must exist on an ordinary initial enable, not only after reload.
             registerApiService();
@@ -117,7 +118,7 @@ public final class PlexonJobs extends JavaPlugin {
         closeBlockSubscription();
         unregisterExpansion();
         if (payouts != null) {
-            while (payouts.totalPending() > 0 && payouts.economyAvailable()) {
+            while (payouts.totalPending() > 0) {
                 int committed = payouts.flush(runtime == null ? 100 : runtime.config().maxCommitsPerTick());
                 if (committed == 0) break;
             }
@@ -166,6 +167,7 @@ public final class PlexonJobs extends JavaPlugin {
             registerPlaceholderApi();
             scheduleRuntimeTasks();
             updateModuleState();
+            acceptProfileDefinitions(next);
         } catch (RuntimeException failure) {
             cancelTasks();
             unregisterExpansion();
@@ -206,6 +208,10 @@ public final class PlexonJobs extends JavaPlugin {
         runtime = prepared.runtime();
         blockRouter = prepared.router();
         messages = prepared.messages();
+    }
+
+    private void acceptProfileDefinitions(PreparedRuntime prepared) {
+        profiles.acceptKnownJobs(prepared.registry().definitions().stream().map(definition -> definition.id()).toList());
     }
 
     private JobsEconomy createEconomy() {
