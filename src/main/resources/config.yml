@@ -8,10 +8,11 @@ membership:
   keep-level-on-leave: true
 
 payout:
-  # Phase 2 requires coalescing. IMMEDIATE/per-event Vault deposits are intentionally unsupported.
+  # PlexonJobs intentionally coalesces Vault deposits outside the work-event path.
   mode: COALESCED
   flush-ticks: 40
   max-commits-per-tick: 100
+  # Number of retry attempts after the initial failed deposit before the payout is blocked for admin review.
   retry-limit: 3
   money-scale: 2
 
@@ -26,10 +27,3 @@ profiles:
 gameplay:
   allowed-game-modes: [SURVIVAL]
   disabled-worlds: []
-
-diagnostics:
-  log-payout-failures: true
-  audit-retention-hours: 24
-
-compatibility:
-  claim-jobs-command: true
