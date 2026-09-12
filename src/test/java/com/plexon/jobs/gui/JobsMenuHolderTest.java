@@ -27,7 +27,7 @@ class JobsMenuHolderTest {
 
     @Test
     void actionSnapshotsAreImmutableAndPresentationIndependent() {
-        JobsMenuHolder holder = new JobsMenuHolder(UUID.randomUUID(), JobsMenuHolder.View.OVERVIEW, null);
+        JobsMenuHolder holder = new JobsMenuHolder(UUID.randomUUID(), JobsMenuHolder.View.DASHBOARD, null);
         holder.action(10, new JobsMenuHolder.MenuAction(JobsMenuHolder.ActionType.OPEN_JOB, "miner"));
         Map<Integer, JobsMenuHolder.MenuAction> snapshot = holder.actions();
 
@@ -41,7 +41,7 @@ class JobsMenuHolderTest {
 
     @Test
     void inventoryBindingIsOneShot() {
-        JobsMenuHolder holder = new JobsMenuHolder(UUID.randomUUID(), JobsMenuHolder.View.OVERVIEW, null);
+        JobsMenuHolder holder = new JobsMenuHolder(UUID.randomUUID(), JobsMenuHolder.View.DASHBOARD, null);
         assertThrows(IllegalStateException.class, holder::getInventory);
 
         Inventory inventory = (Inventory) Proxy.newProxyInstance(
