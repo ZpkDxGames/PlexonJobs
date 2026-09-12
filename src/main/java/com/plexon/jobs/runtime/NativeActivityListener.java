@@ -144,15 +144,15 @@ public final class NativeActivityListener implements Listener {
         if (event.getView().getTopInventory().getType() != InventoryType.ANVIL) return;
         ItemStack secondInput = event.getView().getTopInventory().getItem(ANVIL_SECOND_INPUT_SLOT);
         ItemStack result = event.getCurrentItem();
-        if (!qualifiesAnvilResult(event.getRawSlot(), secondInput, result)) return;
+        boolean hasSecondInput = secondInput != null && !secondInput.getType().isAir();
+        boolean hasResult = result != null && !result.getType().isAir();
+        if (!qualifiesAnvilResult(event.getRawSlot(), hasSecondInput, hasResult)) return;
         plugin.grants().handle(player, ActivityType.REPAIR, result.getType().name(), 1,
                 "paper:anvil:" + result.getType().name());
     }
 
-    static boolean qualifiesAnvilResult(int rawSlot, ItemStack secondInput, ItemStack result) {
-        return rawSlot == ANVIL_RESULT_SLOT
-                && secondInput != null && !secondInput.getType().isAir()
-                && result != null && !result.getType().isAir();
+    static boolean qualifiesAnvilResult(int rawSlot, boolean hasSecondInput, boolean hasResult) {
+        return rawSlot == ANVIL_RESULT_SLOT && hasSecondInput && hasResult;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
