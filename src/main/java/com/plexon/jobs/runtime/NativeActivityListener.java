@@ -34,6 +34,9 @@ import java.util.Objects;
 
 /** Native Paper activity adapters for job families not currently exposed through PlexonCore. */
 public final class NativeActivityListener implements Listener {
+    private static final int ANVIL_SECOND_INPUT_SLOT = 1;
+    private static final int ANVIL_RESULT_SLOT = 2;
+
     private final PlexonJobs plugin;
     private final PlacementCreditCache placementCredits;
     private final BrewerAttributionTracker brewerAttribution;
@@ -133,6 +136,18 @@ public final class NativeActivityListener implements Listener {
         if (result == null || result.getType().isAir()) return;
         plugin.grants().handle(player, ActivityType.REPAIR, result.getType().name(), 1,
                 "paper:smith:" + result.getType().name());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onAnvilResult(InventoryClickEvent event) {
+        if (!plugin.runtime().registry().handles(ActivityType.REPAIR) || !(event.getWhoClicked() instanceof Player player)) return;
+        if (event.getView().getTopInventory().getType() != InventoryType.ANVIL || event.getRawSlot() != ANVIL_RESULT_SLOT) return;
+        ItemStack secondInput = event.getView().getTopInventory().getItem(ANVIL_SECOND_INPUT_SLOT);
+        if (secondInput == null || secondInput.getType().isAir()) return;
+        ItemStack result = event.getCurrentItem();
+        if (result == null || result.getType().isAir()) return;
+        plugin.grants().handle(player, ActivityType.REPAIR, result.getType().name(), 1,
+                "paper:anvil:" + result.getType().name());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
