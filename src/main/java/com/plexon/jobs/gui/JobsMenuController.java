@@ -38,6 +38,7 @@ public final class JobsMenuController implements Listener {
 
     public void openOverview(Player player) {
         Messages messages = plugin.messages();
+        plugin.dailyPersistence().ensure(player.getUniqueId());
         JobsMenuHolder holder = new JobsMenuHolder(player.getUniqueId(), JobsMenuHolder.View.OVERVIEW, null);
         Inventory inventory = Bukkit.createInventory(holder, 36, messages.renderBare("menu.title"));
         holder.bind(inventory);
@@ -69,6 +70,7 @@ public final class JobsMenuController implements Listener {
             player.sendMessage(plugin.messages().render("unknown-job"));
             return;
         }
+        plugin.dailyPersistence().ensure(player.getUniqueId());
         Messages messages = plugin.messages();
         JobsMenuHolder holder = new JobsMenuHolder(player.getUniqueId(), JobsMenuHolder.View.DETAILS, job.id());
         Inventory inventory = Bukkit.createInventory(holder, 27,
@@ -202,8 +204,7 @@ public final class JobsMenuController implements Listener {
             lore.add(Component.text("Level: " + level + "/" + job.maxLevel(), NamedTextColor.GRAY));
             lore.add(Component.text("Total XP: " + xp, NamedTextColor.GRAY));
             lore.add(Component.text("XP to next: " + plugin.runtime().registry().curve(job.id()).xpToNextLevel(xp), NamedTextColor.GRAY));
-            DailyLimitService.CounterView earned = plugin.limits().view(player.getUniqueId(), job.id());
-            lore.add(Component.text("Earned today: " + Money.format(earned.moneyMinor(), plugin.runtime().config().moneyScale()), NamedTextColor.GRAY));
+            appendDailyEarnings(player, job, lore);
         } else {
             lore.add(messages.renderBare("menu.loading"));
         }
@@ -226,8 +227,7 @@ public final class JobsMenuController implements Listener {
             lore.add(Component.text("Level: " + level + "/" + job.maxLevel(), NamedTextColor.GRAY));
             lore.add(Component.text("Total XP: " + xp, NamedTextColor.GRAY));
             lore.add(Component.text("XP to next: " + plugin.runtime().registry().curve(job.id()).xpToNextLevel(xp), NamedTextColor.GRAY));
-            DailyLimitService.CounterView earned = plugin.limits().view(player.getUniqueId(), job.id());
-            lore.add(Component.text("Earned today: " + Money.format(earned.moneyMinor(), plugin.runtime().config().moneyScale()), NamedTextColor.GRAY));
+            appendDailyEarnings(player, job, lore);
         } else {
             lore.add(messages.renderBare("menu.loading"));
         }
@@ -236,6 +236,16 @@ public final class JobsMenuController implements Listener {
             lore.add(messages.renderBare("menu.disabled-detail"));
         }
         return item(job.icon(), messages.parse(job.displayName()), lore);
+    }
+
+    private void appendDailyEarnings(Player player, JobDefinition job, List<Component> lore) {
+        if (!plugin.dailyPersistence().ready(player.getUniqueId())) {
+            lore.add(plugin.messages().renderBare("daily-state-loading"));
+            return;
+        }
+        DailyLimitService.CounterView earned = plugin.limits().view(player.getUniqueId(), job.id());
+        lore.add(Component.text("Earned today: " + Money.format(earned.moneyMinor(),
+                plugin.runtime().config().moneyScale()), NamedTextColor.GRAY));
     }
 
     private ItemStack item(Material material, Component name, List<Component> lore) {
