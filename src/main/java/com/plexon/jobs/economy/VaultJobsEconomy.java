@@ -13,6 +13,7 @@ import java.util.UUID;
 public final class VaultJobsEconomy implements JobsEconomy {
     private volatile Economy provider;
 
+    @Override
     public void refresh() {
         RegisteredServiceProvider<Economy> registration = Bukkit.getServicesManager().getRegistration(Economy.class);
         provider = registration == null ? null : registration.getProvider();
