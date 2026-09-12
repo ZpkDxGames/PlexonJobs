@@ -66,15 +66,23 @@ jobs:
       - name: Full source verification
         run: gradle --no-daemon clean test check javadoc shadowJar verifyDistribution --stacktrace
 
-      - name: Enforce revamp source contracts
+      - name: Enforce stable source contracts
         shell: bash
         run: |
           set -euo pipefail
+          test ! -e .github/workflows/rc-release.yml
           test ! -e src/main/java/com/plexon/jobs/gui/JobsGui.java
           grep -q 'implements InventoryHolder' src/main/java/com/plexon/jobs/gui/JobsMenuHolder.java
           grep -q 'InventoryDragEvent' src/main/java/com/plexon/jobs/gui/JobsMenuController.java
           grep -q 'DailyLimitPersistence' src/main/java/com/plexon/jobs/runtime/BlockActivityRouter.java
           grep -q 'daily_earnings' src/main/java/com/plexon/jobs/storage/JobsDatabase.java
+          grep -q 'DELETE FROM player_jobs WHERE player_uuid=?' src/main/java/com/plexon/jobs/storage/JobsDatabase.java
+          grep -q 'LOAD_RETRY_NANOS' src/main/java/com/plexon/jobs/runtime/ProfileManager.java
+          grep -q 'acceptKnownJobs' src/main/java/com/plexon/jobs/runtime/ProfileManager.java
+          grep -q 'acceptProfileDefinitions' src/main/java/com/plexon/jobs/PlexonJobs.java
+          grep -q 'refreshEconomyAvailability' src/main/java/com/plexon/jobs/economy/PayoutService.java
+          grep -q 'if (amount < 0) return Result.fail' src/main/java/com/plexon/jobs/runtime/JobsRuntime.java
+          grep -q 'if (amount == 0) return Result.ok' src/main/java/com/plexon/jobs/runtime/JobsRuntime.java
           if grep -R -n --include='*.java' 'org\.bukkit\.ChatColor' src/main/java; then
             echo 'Legacy ChatColor usage is forbidden in the 1.1 player/admin surface.' >&2
             exit 1
@@ -170,12 +178,17 @@ jobs:
           rollback_tag=$ROLLBACK_TAG
           rollback_sha=$ROLLBACK_SHA
           rollback_jar_sha256=$ROLLBACK_JAR_SHA256
+          profile_load_retry_backoff=PASS
+          profile_storage_exact_snapshot=PASS
+          obsolete_job_reconciliation=PASS
           profile_shutdown_write_barrier=PASS
           daily_cap_graceful_restart_persistence=PASS
           daily_snapshot_revision_guard=PASS
           daily_cap_crash_exactness=NOT_CLAIMED
           shadow_atomic_batch_persistence=PASS
           shadow_shutdown_write_barrier=PASS
+          vault_provider_recovery=PASS
+          api_nonpositive_xp_guard=PASS
           custom_inventory_holder=PASS
           legacy_gui_identity_antipatterns=ABSENT
           configurable_minimessage_surface=PASS
