@@ -43,20 +43,14 @@ public final class PlayerFeedbackService implements Listener {
 
         long now = System.nanoTime();
         FeedbackState state = states.computeIfAbsent(event.playerId(), ignored -> new FeedbackState());
-        if (!event.jobId().equals(state.jobId) || now >= state.expiresAtNanos) {
-            state.jobId = event.jobId();
-            state.accumulatedXp = 0;
-            state.accumulatedMoney = 0;
-        }
-        state.accumulatedXp = saturatingAdd(state.accumulatedXp, event.jobXp());
-        state.accumulatedMoney = saturatingAdd(state.accumulatedMoney, event.moneyMinor());
-        state.expiresAtNanos = now + config.bossBarDurationTicks() * 50_000_000L;
+        RewardFeedbackWindow.Update update = state.window.add(event.jobId(), event.jobXp(), event.moneyMinor(), now,
+                config.bossBarDurationTicks() * 50_000_000L);
 
         if (config.bossBarEnabled()) {
             Component title = plugin.messages().renderBare("feedback.bossbar",
                     Placeholder.component("job", plugin.messages().parse(job.displayName())),
-                    Placeholder.unparsed("xp", Long.toString(state.accumulatedXp)),
-                    Placeholder.unparsed("money", Money.format(state.accumulatedMoney, plugin.runtime().config().moneyScale())),
+                    Placeholder.unparsed("xp", Long.toString(update.xp())),
+                    Placeholder.unparsed("money", Money.format(update.moneyMinor(), plugin.runtime().config().moneyScale())),
                     Placeholder.unparsed("level", Integer.toString(event.level())));
             float progress = progress(plugin.runtime().registry().curve(event.jobId()), event.totalXp(), event.level());
             if (state.bar == null) {
@@ -107,7 +101,7 @@ public final class PlayerFeedbackService implements Listener {
             Map.Entry<UUID, FeedbackState> entry = iterator.next();
             FeedbackState state = entry.getValue();
             Player player = plugin.getServer().getPlayer(entry.getKey());
-            if (player == null || !player.isOnline() || now >= state.expiresAtNanos || !allowed(player)) {
+            if (player == null || !player.isOnline() || state.window.expired(now) || !allowed(player)) {
                 if (player != null && state.bar != null) player.hideBossBar(state.bar);
                 iterator.remove();
             }
@@ -143,17 +137,8 @@ public final class PlayerFeedbackService implements Listener {
         return Sound.sound(Key.key(key), Sound.Source.PLAYER, volume, pitch);
     }
 
-    private static long saturatingAdd(long left, long right) {
-        if (right <= 0) return left;
-        if (left > Long.MAX_VALUE - right) return Long.MAX_VALUE;
-        return left + right;
-    }
-
     private static final class FeedbackState {
-        private String jobId = "";
-        private long accumulatedXp;
-        private long accumulatedMoney;
-        private long expiresAtNanos;
+        private final RewardFeedbackWindow window = new RewardFeedbackWindow();
         private long lastRewardSoundNanos;
         private BossBar bar;
     }
