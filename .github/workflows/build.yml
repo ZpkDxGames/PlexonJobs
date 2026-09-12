@@ -171,8 +171,9 @@ jobs:
           rollback_sha=$ROLLBACK_SHA
           rollback_jar_sha256=$ROLLBACK_JAR_SHA256
           profile_shutdown_write_barrier=PASS
-          daily_cap_restart_persistence=PASS
+          daily_cap_graceful_restart_persistence=PASS
           daily_snapshot_revision_guard=PASS
+          daily_cap_crash_exactness=NOT_CLAIMED
           shadow_atomic_batch_persistence=PASS
           shadow_shutdown_write_barrier=PASS
           custom_inventory_holder=PASS
