@@ -15,6 +15,7 @@ import com.plexon.jobs.gui.JobsMenuController;
 import com.plexon.jobs.integration.PlexonJobsExpansion;
 import com.plexon.jobs.migration.LegacyJobsMigration;
 import com.plexon.jobs.runtime.BlockActivityRouter;
+import com.plexon.jobs.runtime.DailyLimitPersistence;
 import com.plexon.jobs.runtime.DailyLimitService;
 import com.plexon.jobs.runtime.JobRegistry;
 import com.plexon.jobs.runtime.JobsMetrics;
@@ -48,6 +49,7 @@ public final class PlexonJobs extends JavaPlugin {
     private JobsDatabase database;
     private ProfileManager profiles;
     private DailyLimitService limits;
+    private DailyLimitPersistence dailyPersistence;
     private final PendingPayoutLedger pendingLedger = new PendingPayoutLedger();
     private final ShadowLedger shadow = new ShadowLedger();
     private final JobsMetrics metrics = new JobsMetrics();
@@ -120,6 +122,7 @@ public final class PlexonJobs extends JavaPlugin {
         }
         awaitShadowWrites();
         flushShadowBlocking();
+        if (dailyPersistence != null) dailyPersistence.saveAllBlocking();
         if (profiles != null) profiles.saveAllBlocking();
         Bukkit.getServicesManager().unregisterAll(this);
         if (core != null) {
@@ -185,10 +188,14 @@ public final class PlexonJobs extends JavaPlugin {
         if (!ModuleRegistry.ModuleVersionRange.parse(config.coreApiRange()).contains(core.version())) {
             throw new IllegalStateException("Configured Core range " + config.coreApiRange() + " rejects API " + core.version().apiVersion());
         }
-        if (limits == null) limits = new DailyLimitService(config.resetZone(), config.defaultMoneyCapMinor(), config.defaultXpCap());
+        if (limits == null) {
+            limits = new DailyLimitService(config.resetZone(), config.defaultMoneyCapMinor(), config.defaultXpCap());
+            dailyPersistence = new DailyLimitPersistence(core, database, limits, getLogger());
+        }
         PayoutService nextPayouts = new PayoutService(this, economy, pendingLedger, metrics, config.moneyScale(), config.retryLimit());
         JobsRuntime nextRuntime = new JobsRuntime(profiles, registry, config, nextPayouts);
-        BlockActivityRouter nextRouter = new BlockActivityRouter(config, registry, profiles, limits, nextPayouts, shadow, metrics);
+        BlockActivityRouter nextRouter = new BlockActivityRouter(config, registry, profiles, limits, dailyPersistence,
+                nextPayouts, shadow, metrics);
         return new PreparedRuntime(registry, config, nextPayouts, nextRuntime, nextRouter, loaded.messages());
     }
 
@@ -290,6 +297,8 @@ public final class PlexonJobs extends JavaPlugin {
             List<UUID> online = Bukkit.getOnlinePlayers().stream().map(player -> player.getUniqueId()).toList();
             profiles.sweepOnline(online);
             profiles.flushDirty();
+            dailyPersistence.sweepOnline(online);
+            dailyPersistence.flushDirty();
             flushShadowAsync();
         }, cfg.saveIntervalTicks(), cfg.saveIntervalTicks()));
     }
@@ -365,6 +374,7 @@ public final class PlexonJobs extends JavaPlugin {
     public JobsDatabase database() { return database; }
     public JobsRuntime runtime() { return runtime; }
     public DailyLimitService limits() { return limits; }
+    public DailyLimitPersistence dailyPersistence() { return dailyPersistence; }
     public PayoutService payouts() { return payouts; }
     public ShadowLedger shadow() { return shadow; }
     public JobsMetrics metrics() { return metrics; }
