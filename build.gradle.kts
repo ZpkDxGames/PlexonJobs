@@ -30,6 +30,7 @@ dependencies {
 
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation("io.papermc.paper:paper-api:26.2.build.121-stable")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -94,6 +95,10 @@ val verifyDistribution by tasks.registering {
             "plugin.yml",
             "com/plexon/jobs/PlexonJobs.class",
             "com/plexon/jobs/api/PlexonJobsAPI.class",
+            "com/plexon/jobs/gui/JobsMenuHolder.class",
+            "com/plexon/jobs/gui/JobsMenuController.class",
+            "com/plexon/jobs/runtime/DailyLimitPersistence.class",
+            "com/plexon/jobs/runtime/DailyLimitService.class",
             "com/plexon/jobs/event/PlexonJobJoinEvent.class",
             "com/plexon/jobs/event/PlexonJobLeaveEvent.class",
             "com/plexon/jobs/event/PlexonJobXpGainEvent.class",
