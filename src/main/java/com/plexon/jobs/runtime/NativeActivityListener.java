@@ -3,7 +3,6 @@ package com.plexon.jobs.runtime;
 import com.plexon.jobs.PlexonJobs;
 import com.plexon.jobs.model.ActivityType;
 import io.papermc.paper.event.inventory.ItemCraftedEvent;
-import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.block.data.Ageable;
 import org.bukkit.entity.Entity;
@@ -36,14 +35,12 @@ import java.util.Objects;
 /** Native Paper activity adapters for job families not currently exposed through PlexonCore. */
 public final class NativeActivityListener implements Listener {
     private final PlexonJobs plugin;
-    private final ActivityGrantService grants;
     private final PlacementCreditCache placementCredits;
     private final BrewerAttributionTracker brewerAttribution;
     private final NamespacedKey hunterSpawnReason;
 
-    public NativeActivityListener(PlexonJobs plugin, ActivityGrantService grants) {
+    public NativeActivityListener(PlexonJobs plugin) {
         this.plugin = Objects.requireNonNull(plugin);
-        this.grants = Objects.requireNonNull(grants);
         this.placementCredits = new PlacementCreditCache(
                 plugin.runtime().config().activity().builderRepeatWindowSeconds(),
                 plugin.runtime().config().activity().builderMaxTrackedPositions());
@@ -56,14 +53,14 @@ public final class NativeActivityListener implements Listener {
     public void onMatureCropBreak(BlockBreakEvent event) {
         if (!plugin.runtime().registry().handles(ActivityType.FARM)) return;
         if (!(event.getBlock().getBlockData() instanceof Ageable ageable) || ageable.getAge() < ageable.getMaximumAge()) return;
-        grants.handle(event.getPlayer(), ActivityType.FARM, event.getBlock().getType().name(), 1,
+        plugin.grants().handle(event.getPlayer(), ActivityType.FARM, event.getBlock().getType().name(), 1,
                 "paper:farm-break:" + blockSource(event.getBlock().getX(), event.getBlock().getY(), event.getBlock().getZ()));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onHarvest(PlayerHarvestBlockEvent event) {
         if (!plugin.runtime().registry().handles(ActivityType.FARM)) return;
-        grants.handle(event.getPlayer(), ActivityType.FARM, event.getHarvestedBlock().getType().name(), 1,
+        plugin.grants().handle(event.getPlayer(), ActivityType.FARM, event.getHarvestedBlock().getType().name(), 1,
                 "paper:harvest:" + blockSource(event.getHarvestedBlock().getX(), event.getHarvestedBlock().getY(), event.getHarvestedBlock().getZ()));
     }
 
@@ -81,7 +78,7 @@ public final class NativeActivityListener implements Listener {
         if (killer == null) return;
         String reason = dead.getPersistentDataContainer().get(hunterSpawnReason, PersistentDataType.STRING);
         if (reason == null || !plugin.runtime().config().activity().hunterAllowedSpawnReasons().contains(reason.toUpperCase(Locale.ROOT))) return;
-        grants.handle(killer, ActivityType.KILL, dead.getType().name(), 1,
+        plugin.grants().handle(killer, ActivityType.KILL, dead.getType().name(), 1,
                 "paper:kill:" + dead.getUniqueId());
     }
 
@@ -99,7 +96,7 @@ public final class NativeActivityListener implements Listener {
         } else {
             key = caught.getType().name();
         }
-        grants.handle(event.getPlayer(), ActivityType.FISH, key, units,
+        plugin.grants().handle(event.getPlayer(), ActivityType.FISH, key, units,
                 "paper:fish:" + caught.getUniqueId());
     }
 
@@ -109,7 +106,7 @@ public final class NativeActivityListener implements Listener {
         var block = event.getBlockPlaced();
         if (!placementCredits.credit(event.getPlayer().getUniqueId(), block.getWorld().getUID(),
                 block.getX(), block.getY(), block.getZ(), System.nanoTime())) return;
-        grants.handle(event.getPlayer(), ActivityType.PLACE, block.getType().name(), 1,
+        plugin.grants().handle(event.getPlayer(), ActivityType.PLACE, block.getType().name(), 1,
                 "paper:place:" + blockSource(block.getX(), block.getY(), block.getZ()));
     }
 
@@ -118,14 +115,14 @@ public final class NativeActivityListener implements Listener {
         if (!plugin.runtime().registry().handles(ActivityType.CRAFT)) return;
         ItemStack crafted = event.getCraftedItem();
         if (crafted == null || crafted.getType().isAir()) return;
-        grants.handle(event.getPlayer(), ActivityType.CRAFT, crafted.getType().name(), Math.max(1, crafted.getAmount()),
+        plugin.grants().handle(event.getPlayer(), ActivityType.CRAFT, crafted.getType().name(), Math.max(1, crafted.getAmount()),
                 "paper:craft:" + crafted.getType().name());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onFurnaceExtract(FurnaceExtractEvent event) {
         if (!plugin.runtime().registry().handles(ActivityType.SMELT)) return;
-        grants.handle(event.getPlayer(), ActivityType.SMELT, event.getItemType().name(), Math.max(1, event.getItemAmount()),
+        plugin.grants().handle(event.getPlayer(), ActivityType.SMELT, event.getItemType().name(), Math.max(1, event.getItemAmount()),
                 "paper:smelt:" + event.getBlock().getWorld().getUID() + ":" + blockSource(event.getBlock().getX(), event.getBlock().getY(), event.getBlock().getZ()));
     }
 
@@ -134,14 +131,14 @@ public final class NativeActivityListener implements Listener {
         if (!plugin.runtime().registry().handles(ActivityType.REPAIR) || !(event.getWhoClicked() instanceof Player player)) return;
         ItemStack result = event.getCurrentItem();
         if (result == null || result.getType().isAir()) return;
-        grants.handle(player, ActivityType.REPAIR, result.getType().name(), 1,
+        plugin.grants().handle(player, ActivityType.REPAIR, result.getType().name(), 1,
                 "paper:smith:" + result.getType().name());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onMend(PlayerItemMendEvent event) {
         if (!plugin.runtime().registry().handles(ActivityType.REPAIR) || event.getRepairAmount() <= 0) return;
-        grants.handle(event.getPlayer(), ActivityType.REPAIR, event.getItem().getType().name(),
+        plugin.grants().handle(event.getPlayer(), ActivityType.REPAIR, event.getItem().getType().name(),
                 Math.max(1, event.getRepairAmount()), "paper:mend");
     }
 
@@ -164,14 +161,14 @@ public final class NativeActivityListener implements Listener {
         String key = ingredient == null || ingredient.getType().isAir() ? "*" : ingredient.getType().name();
         long resultCount = event.getResults().stream().filter(Objects::nonNull).filter(stack -> !stack.getType().isAir()).count();
         if (resultCount <= 0) return;
-        grants.handle(player, ActivityType.BREW, key, resultCount,
+        plugin.grants().handle(player, ActivityType.BREW, key, resultCount,
                 "paper:brew:" + event.getBlock().getWorld().getUID() + ":" + blockSource(event.getBlock().getX(), event.getBlock().getY(), event.getBlock().getZ()));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEnchant(EnchantItemEvent event) {
         if (!plugin.runtime().registry().handles(ActivityType.ENCHANT)) return;
-        grants.handle(event.getEnchanter(), ActivityType.ENCHANT, event.getItem().getType().name(),
+        plugin.grants().handle(event.getEnchanter(), ActivityType.ENCHANT, event.getItem().getType().name(),
                 Math.max(1, event.getExpLevelCost()), "paper:enchant:" + event.getItem().getType().name());
     }
 
