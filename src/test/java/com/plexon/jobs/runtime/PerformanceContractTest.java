@@ -29,9 +29,11 @@ class PerformanceContractTest {
         int stopProducers = plugin.indexOf("cancelTasks();");
         int awaitShadow = plugin.indexOf("awaitShadowWrites();", stopProducers);
         int finalShadow = plugin.indexOf("flushShadowBlocking();", awaitShadow);
-        int finalProfiles = plugin.indexOf("profiles.saveAllBlocking();", finalShadow);
-        assertTrue(stopProducers >= 0 && awaitShadow > stopProducers && finalShadow > awaitShadow && finalProfiles > finalShadow,
-                "Shutdown must stop producers, settle shadow IO, flush final shadow state, then save final profiles");
+        int finalDaily = plugin.indexOf("dailyPersistence.saveAllBlocking();", finalShadow);
+        int finalProfiles = plugin.indexOf("profiles.saveAllBlocking();", finalDaily);
+        assertTrue(stopProducers >= 0 && awaitShadow > stopProducers && finalShadow > awaitShadow &&
+                        finalDaily > finalShadow && finalProfiles > finalDaily,
+                "Shutdown must stop producers, settle shadow IO, flush shadow/daily state, then save final profiles");
 
         String profiles = Files.readString(Path.of("src/main/java/com/plexon/jobs/runtime/ProfileManager.java"));
         int saveAll = profiles.indexOf("public void saveAllBlocking()");
@@ -39,6 +41,25 @@ class PerformanceContractTest {
         int finalDatabaseSave = profiles.indexOf("database.save(snapshot", awaitProfiles);
         assertTrue(saveAll >= 0 && awaitProfiles > saveAll && finalDatabaseSave > awaitProfiles,
                 "Final profile snapshots must be written only after older async saves settle");
+    }
+
+    @Test void stableRecoveryAndPersistenceContractsRemainPresent() throws Exception {
+        String payouts = Files.readString(Path.of("src/main/java/com/plexon/jobs/economy/PayoutService.java"));
+        assertTrue(payouts.contains("refreshEconomyAvailability()"),
+                "Payout flushes must refresh Vault provider discovery so transient outages can recover");
+
+        String profiles = Files.readString(Path.of("src/main/java/com/plexon/jobs/runtime/ProfileManager.java"));
+        assertTrue(profiles.contains("LOAD_RETRY_NANOS"));
+        assertTrue(profiles.contains("loadRetryAfter"));
+        assertTrue(profiles.contains("PlayerJobsProfile.State.FAILED"));
+
+        String database = Files.readString(Path.of("src/main/java/com/plexon/jobs/storage/JobsDatabase.java"));
+        assertTrue(database.contains("DELETE FROM player_jobs WHERE player_uuid=?"),
+                "Profile persistence must replace player rows exactly rather than retain removed jobs");
+
+        String runtime = Files.readString(Path.of("src/main/java/com/plexon/jobs/runtime/JobsRuntime.java"));
+        assertTrue(runtime.contains("if (amount < 0) return Result.fail"));
+        assertTrue(runtime.contains("if (amount == 0) return Result.ok"));
     }
 
     @Test void shadowAsyncPathUsesAtomicBatchPersistence() throws Exception {
