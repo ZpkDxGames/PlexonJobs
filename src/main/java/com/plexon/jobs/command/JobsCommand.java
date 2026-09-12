@@ -46,13 +46,25 @@ public final class JobsCommand implements TabExecutor {
             case "leave" -> {
                 if (args.length < 2) return usage(player, "/jobs leave <job>");
                 var job = runtime.registry().find(args[1]).orElse(null);
-                PlexonJobsAPI.Result result = runtime.leaveJob(player.getUniqueId(), args[1]);
-                if (result.success() && job != null) {
+                if (job == null) {
+                    player.sendMessage(plugin.messages().render("unknown-job"));
+                    return true;
+                }
+                if (!runtime.config().keepLevelOnLeave() && !confirmed(args, 2)) {
+                    player.sendMessage(plugin.messages().render("menu.reset-warning"));
+                    return usage(player, "/jobs leave " + job.id() + " confirm");
+                }
+                PlexonJobsAPI.Result result = runtime.leaveJob(player.getUniqueId(), job.id());
+                if (result.success()) {
                     player.sendMessage(plugin.messages().render("left",
                             Placeholder.component("job", plugin.messages().parse(job.displayName()))));
                 } else sendFailure(player, result);
             }
             case "leaveall" -> {
+                if (!runtime.config().keepLevelOnLeave() && !confirmed(args, 1)) {
+                    player.sendMessage(plugin.messages().render("menu.reset-warning"));
+                    return usage(player, "/jobs leaveall confirm");
+                }
                 for (String id : List.copyOf(runtime.activeJobs(player.getUniqueId()))) runtime.leaveJob(player.getUniqueId(), id);
                 player.sendMessage(plugin.messages().render("left-all"));
             }
@@ -119,6 +131,10 @@ public final class JobsCommand implements TabExecutor {
                         plugin.runtime().config().moneyScale()), NamedTextColor.GRAY)));
     }
 
+    private static boolean confirmed(String[] args, int index) {
+        return args.length > index && args[index].equalsIgnoreCase("confirm");
+    }
+
     private static void sendFailure(Player player, PlexonJobsAPI.Result result) {
         player.sendMessage(Component.text(result.message(), NamedTextColor.RED));
     }
@@ -133,6 +149,12 @@ public final class JobsCommand implements TabExecutor {
         if (args.length == 1) return filter(List.of("browse", "info", "join", "leave", "leaveall", "stats", "earnings"), args[0]);
         if (args.length == 2 && List.of("info", "join", "leave").contains(args[0].toLowerCase(Locale.ROOT))) {
             return filter(plugin.runtime().registry().definitions().stream().map(d -> d.id()).toList(), args[1]);
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("leaveall") && !plugin.runtime().config().keepLevelOnLeave()) {
+            return filter(List.of("confirm"), args[1]);
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("leave") && !plugin.runtime().config().keepLevelOnLeave()) {
+            return filter(List.of("confirm"), args[2]);
         }
         return List.of();
     }
