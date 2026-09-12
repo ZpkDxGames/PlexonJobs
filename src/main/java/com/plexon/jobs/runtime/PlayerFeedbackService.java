@@ -2,8 +2,6 @@ package com.plexon.jobs.runtime;
 
 import com.plexon.jobs.PlexonJobs;
 import com.plexon.jobs.config.FeedbackConfig;
-import com.plexon.jobs.event.PlexonJobLevelUpEvent;
-import com.plexon.jobs.event.PlexonJobRewardGrantedEvent;
 import com.plexon.jobs.model.JobDefinition;
 import com.plexon.jobs.model.XpCurve;
 import com.plexon.jobs.util.Money;
@@ -14,8 +12,6 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.title.Title;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -23,36 +19,105 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 
-/** One mutable BossBar per active player; reward callbacks only mutate in-memory feedback state. */
-public final class PlayerFeedbackService implements Listener {
+/**
+ * Direct feedback sink. Reward callbacks only mutate compact memory; one global flush renders dirty players.
+ */
+public final class PlayerFeedbackService implements RewardFeedbackSink {
     private static final long REWARD_SOUND_COOLDOWN_NANOS = 250_000_000L;
     private final PlexonJobs plugin;
     private final Map<UUID, FeedbackState> states = new HashMap<>();
+    private Map<String, Component> displayNames = Map.of();
 
     public PlayerFeedbackService(PlexonJobs plugin) {
         this.plugin = plugin;
     }
 
-    @EventHandler
-    public void onReward(PlexonJobRewardGrantedEvent event) {
+    public void refreshCache() {
+        if (plugin.runtime() == null || plugin.messages() == null) {
+            displayNames = Map.of();
+            return;
+        }
+        Map<String, Component> next = new HashMap<>();
+        for (JobDefinition job : plugin.runtime().registry().definitions()) {
+            next.put(job.id(), plugin.messages().parse(job.displayName()));
+        }
+        displayNames = Map.copyOf(next);
+    }
+
+    @Override
+    public void onReward(RewardFeedback reward) {
+        FeedbackConfig config = plugin.runtime().config().feedback();
+        if (!config.enabled()) return;
+        long now = System.nanoTime();
+        FeedbackState state = states.computeIfAbsent(reward.playerId(), ignored -> new FeedbackState());
+        if (state.jobId != null && !state.jobId.equals(reward.jobId())) {
+            state.xpDelta = 0L;
+            state.moneyDelta = 0L;
+        }
+        state.jobId = reward.jobId();
+        state.xpDelta = saturatingAdd(state.xpDelta, reward.jobXp());
+        state.moneyDelta = saturatingAdd(state.moneyDelta, reward.moneyMinor());
+        state.totalXp = reward.totalXp();
+        state.level = reward.level();
+        state.expiryNanos = now + config.bossBarDurationTicks() * 50_000_000L;
+        state.soundPending |= config.rewardSoundEnabled();
+        state.dirty = true;
+        plugin.metrics().feedbackDirtyPlayers(dirtyCount());
+    }
+
+    @Override
+    public void onLevelUp(LevelUpFeedback event) {
         Player player = plugin.getServer().getPlayer(event.playerId());
         if (!allowed(player)) return;
         FeedbackConfig config = plugin.runtime().config().feedback();
-        JobDefinition job = plugin.runtime().registry().find(event.jobId()).orElse(null);
-        if (job == null) return;
+        Component job = displayNames.getOrDefault(event.jobId(), Component.text(event.jobId()));
+        if (config.levelTitleEnabled()) {
+            Component title = plugin.messages().renderBare("feedback.level-up-title",
+                    Placeholder.component("job", job),
+                    Placeholder.unparsed("level", Integer.toString(event.newLevel())));
+            Component subtitle = plugin.messages().renderBare("feedback.level-up-subtitle",
+                    Placeholder.component("job", job),
+                    Placeholder.unparsed("old", Integer.toString(event.oldLevel())),
+                    Placeholder.unparsed("level", Integer.toString(event.newLevel())));
+            player.showTitle(Title.title(title, subtitle,
+                    Title.Times.times(Duration.ofMillis(250), Duration.ofMillis(1_500), Duration.ofMillis(400))));
+        }
+        if (config.levelSoundEnabled()) player.playSound(sound(config.levelSound(), config.levelVolume(), config.levelPitch()));
+    }
 
+    /** Called by the single plugin-level feedback task. */
+    public void flush() {
         long now = System.nanoTime();
-        FeedbackState state = states.computeIfAbsent(event.playerId(), ignored -> new FeedbackState());
-        RewardFeedbackWindow.Update update = state.window.add(event.jobId(), event.jobXp(), event.moneyMinor(), now,
-                config.bossBarDurationTicks() * 50_000_000L);
+        Iterator<Map.Entry<UUID, FeedbackState>> iterator = states.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<UUID, FeedbackState> entry = iterator.next();
+            FeedbackState state = entry.getValue();
+            Player player = plugin.getServer().getPlayer(entry.getKey());
+            if (player == null || !player.isOnline() || !allowed(player) || now >= state.expiryNanos) {
+                if (player != null && state.bar != null) player.hideBossBar(state.bar);
+                iterator.remove();
+                continue;
+            }
+            if (!state.dirty) continue;
+            render(player, state, now);
+            state.dirty = false;
+            plugin.metrics().feedbackVisualFlush();
+        }
+        plugin.metrics().feedbackDirtyPlayers(dirtyCount());
+    }
 
+    private void render(Player player, FeedbackState state, long now) {
+        FeedbackConfig config = plugin.runtime().config().feedback();
+        JobDefinition jobDefinition = plugin.runtime().registry().find(state.jobId).orElse(null);
+        if (jobDefinition == null) return;
+        Component job = displayNames.getOrDefault(state.jobId, Component.text(state.jobId));
         if (config.bossBarEnabled()) {
             Component title = plugin.messages().renderBare("feedback.bossbar",
-                    Placeholder.component("job", plugin.messages().parse(job.displayName())),
-                    Placeholder.unparsed("xp", Long.toString(update.xp())),
-                    Placeholder.unparsed("money", Money.format(update.moneyMinor(), plugin.runtime().config().moneyScale())),
-                    Placeholder.unparsed("level", Integer.toString(event.level())));
-            float progress = progress(plugin.runtime().registry().curve(event.jobId()), event.totalXp(), event.level());
+                    Placeholder.component("job", job),
+                    Placeholder.unparsed("xp", Long.toString(state.xpDelta)),
+                    Placeholder.unparsed("money", Money.format(state.moneyDelta, plugin.runtime().config().moneyScale())),
+                    Placeholder.unparsed("level", Integer.toString(state.level)));
+            float progress = progress(plugin.runtime().registry().curve(state.jobId), state.totalXp, state.level);
             if (state.bar == null) {
                 state.bar = BossBar.bossBar(title, progress, BossBar.Color.GREEN, BossBar.Overlay.PROGRESS);
                 player.showBossBar(state.bar);
@@ -62,50 +127,13 @@ public final class PlayerFeedbackService implements Listener {
                 state.bar.color(BossBar.Color.GREEN);
             }
         }
-
-        if (config.rewardSoundEnabled() && now - state.lastRewardSoundNanos >= REWARD_SOUND_COOLDOWN_NANOS) {
+        if (state.soundPending && now - state.lastRewardSoundNanos >= REWARD_SOUND_COOLDOWN_NANOS) {
             player.playSound(sound(config.rewardSound(), config.rewardVolume(), config.rewardPitch()));
             state.lastRewardSoundNanos = now;
         }
-    }
-
-    @EventHandler
-    public void onLevelUp(PlexonJobLevelUpEvent event) {
-        Player player = plugin.getServer().getPlayer(event.playerId());
-        if (!allowed(player)) return;
-        FeedbackConfig config = plugin.runtime().config().feedback();
-        JobDefinition job = plugin.runtime().registry().find(event.jobId()).orElse(null);
-        if (job == null) return;
-
-        if (config.levelTitleEnabled()) {
-            Component title = plugin.messages().renderBare("feedback.level-up-title",
-                    Placeholder.component("job", plugin.messages().parse(job.displayName())),
-                    Placeholder.unparsed("level", Integer.toString(event.newLevel())));
-            Component subtitle = plugin.messages().renderBare("feedback.level-up-subtitle",
-                    Placeholder.component("job", plugin.messages().parse(job.displayName())),
-                    Placeholder.unparsed("old", Integer.toString(event.oldLevel())),
-                    Placeholder.unparsed("level", Integer.toString(event.newLevel())));
-            player.showTitle(Title.title(title, subtitle,
-                    Title.Times.times(Duration.ofMillis(250), Duration.ofMillis(1_500), Duration.ofMillis(400))));
-        }
-        if (config.levelSoundEnabled()) {
-            player.playSound(sound(config.levelSound(), config.levelVolume(), config.levelPitch()));
-        }
-    }
-
-    /** Called by one global plugin task; never scheduled per reward. */
-    public void tick() {
-        long now = System.nanoTime();
-        Iterator<Map.Entry<UUID, FeedbackState>> iterator = states.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<UUID, FeedbackState> entry = iterator.next();
-            FeedbackState state = entry.getValue();
-            Player player = plugin.getServer().getPlayer(entry.getKey());
-            if (player == null || !player.isOnline() || state.window.expired(now) || !allowed(player)) {
-                if (player != null && state.bar != null) player.hideBossBar(state.bar);
-                iterator.remove();
-            }
-        }
+        state.soundPending = false;
+        state.xpDelta = 0L;
+        state.moneyDelta = 0L;
     }
 
     public void hideAll() {
@@ -114,9 +142,16 @@ public final class PlayerFeedbackService implements Listener {
             if (player != null && state.bar != null) player.hideBossBar(state.bar);
         });
         states.clear();
+        plugin.metrics().feedbackDirtyPlayers(0);
     }
 
     public int activeBars() { return states.size(); }
+
+    private int dirtyCount() {
+        int count = 0;
+        for (FeedbackState state : states.values()) if (state.dirty) count++;
+        return count;
+    }
 
     private boolean allowed(Player player) {
         return player != null && player.isOnline() && plugin.runtime() != null
@@ -137,9 +172,22 @@ public final class PlayerFeedbackService implements Listener {
         return Sound.sound(Key.key(key), Sound.Source.PLAYER, volume, pitch);
     }
 
+    private static long saturatingAdd(long left, long right) {
+        if (right <= 0) return left;
+        if (left > Long.MAX_VALUE - right) return Long.MAX_VALUE;
+        return left + right;
+    }
+
     private static final class FeedbackState {
-        private final RewardFeedbackWindow window = new RewardFeedbackWindow();
+        private String jobId;
+        private long xpDelta;
+        private long moneyDelta;
+        private long totalXp;
+        private int level;
+        private long expiryNanos;
         private long lastRewardSoundNanos;
+        private boolean soundPending;
+        private boolean dirty;
         private BossBar bar;
     }
 }

@@ -1,137 +1,86 @@
-# PlexonJobs 2.0.0
+# PlexonJobs 2.5.0
 
-PlexonJobs is the Plexon-native occupation, progression, payout, and player-feedback layer for PlexonCraft. `2.0.0` completes every built-in job family while preserving the coalesced persistence/economy architecture established in 1.1.
-
-Stable `v1.1.0` is the rollback boundary for 2.0.
+PlexonJobs is the Plexon-native occupation, progression, payout and player-feedback system for PlexonCraft. `2.5.0` is a performance-architecture and product-UI stable release built on the `v2.0.0` source boundary.
 
 ## Platform
 
-- Paper 26.2 build 121 stable
+- Paper `26.2.build.121-stable`
 - Java 25 / class major 69
-- PlexonCore 2.0.4, Core API 2.x (`>=2.0 <3.0`)
-- Vault API 1.7; TheosisEconomy remains the balance authority through Vault
-- PlaceholderAPI optional
+- PlexonCore 2.0.4 (`>=2.0 <3.0`)
+- Vault API 1.7; PlaceholderAPI optional
 - SQLite/WAL schema 2
+
+## Performance architecture
+
+High-frequency activity dispatch is compiled instead of reconstructed per event:
+
+- `CompiledJobRoutes` assigns every accepted job a bit in a 64-bit mask and compiles typed BREAK routes plus exact/wildcard activity routes at startup/reload.
+- `ActivityInterestIndex` keeps one compact `PlayerExecutionState` per online player with joined-job and activity masks plus readiness.
+- The BREAK path intersects `routeMask & joinedJobMask` before Bukkit player lookup, profile work, daily work, feedback or reward math.
+- Paper activity listeners are split by family and are registered only while at least one online participant needs that family.
+- PlexonCore block subscription is rebuilt only on topology transitions and contains only the union of materials needed by active online break-job participants.
+- Profile and daily hydration start from player lifecycle logic and fail closed until authoritative state is ready.
+- Explorer owns no repeating sampler while there are no online Explorer participants.
+- Hunter defaults to memory-only origin eligibility; `PERSISTENT_PDC` remains an explicit compatibility/permanence option.
+
+No gameplay callback performs SQL, Vault deposits, YAML parsing or async-task creation.
+
+## Feedback architecture
+
+Authoritative reward code calls an internal `RewardFeedbackSink`; it does not depend on PlexonJobs' own public Bukkit events. Reward callbacks only accumulate compact dirty state. One plugin-level task flushes dirty players at `performance.feedback-flush-ticks` (default 3), reusing one BossBar per player.
+
+Public payout/XP/reward/level events remain API-compatible. The high-frequency pipeline allocates and dispatches them only when their handler list has registered listeners.
 
 ## Built-in jobs
 
-All 12 default job families are enabled:
+All 12 stable job families remain enabled by default: Miner, Woodcutter, Digger, Farmer, Hunter, Fisher, Builder, Crafter, Blacksmith, Brewer, Enchanter and Explorer. Miner/Woodcutter/Digger continue to use PlexonCore natural-block provenance. Existing daily-cap, SHADOW, persistence, payout, Builder repeat-suppression, Brewer attribution and public API contracts remain in place.
 
-- **Miner** — natural mining through PlexonCore block provenance.
-- **Woodcutter** — natural logs/stems through PlexonCore block provenance.
-- **Digger** — natural diggable blocks through PlexonCore block provenance.
-- **Farmer** — mature crops and supported harvest-without-breaking actions.
-- **Hunter** — player kills with conservative mob spawn-origin eligibility.
-- **Fisher** — successful fishing catches and configured treasure/junk.
-- **Builder** — configured block placements with repeat-position abuse suppression.
-- **Crafter** — successful Paper post-craft result events.
-- **Blacksmith** — furnace extraction, smithing, and Mending repair activity.
-- **Brewer** — player-attributed completed brewing batches.
-- **Enchanter** — successful enchant operations.
-- **Explorer** — first biome/environment discoveries sampled periodically.
+## Premium jobs UI
 
-Miner, Woodcutter, and Digger remain on the shared PlexonCore high-frequency block-break gateway. PlexonJobs does not add a duplicate block-break engine for those jobs. Other activity families use narrow Paper events only where PlexonCore does not currently expose an authoritative shared context.
+`/jobs` opens a 45-slot dashboard. The product surface also includes:
 
-## Unified reward pipeline
+- `/jobs browse` — 54-slot paginated browser with All / Joined / Available filters;
+- `/jobs profile` — 45-slot profile with combined XP, daily earnings, pending payout and active jobs;
+- `/jobs <job>` — 45-slot job details with level/XP, seven-segment progress, daily earnings/caps and join/leave control;
+- destructive leave confirmation through Paper's Dialog API when `membership.keep-level-on-leave: false`.
 
-Every activity flows through `ActivityGrantService`. The service owns:
-
-- SHADOW / PRIMARY / DISABLED behavior;
-- allowed game mode and disabled-world policy;
-- profile readiness and active membership;
-- daily-cap hydration, clamping, and commit;
-- cancellable `PlexonJobPayoutEvent`;
-- XP and level progression/events;
-- coalesced Vault accrual;
-- SHADOW aggregation and metrics;
-- post-grant `PlexonJobRewardGrantedEvent` for presentation.
-
-Gameplay callbacks perform no database query/write, no Vault deposit, no YAML parsing, and no task creation.
-
-## Dynamic player feedback
-
-Successful PRIMARY rewards can show configurable feedback to players with `plexonjobs.feedback`:
-
-- one reusable Adventure BossBar per player;
-- XP and money earned coalesced while the bar is visible;
-- current level and level-progress bar;
-- throttled reward sound;
-- level-up title/subtitle;
-- separate level-up sound.
-
-Repeated rewards update the same BossBar and refresh its expiry. One global cleanup task handles expiry; PlexonJobs does not schedule one task per reward.
-
-Feedback text lives in `messages.yml`; sound and timing controls live in `config.yml`.
-
-## Activity safety
-
-- **Hunter:** spawn reason is stored on living entities in PDC. Unknown, spawner, trial-spawner, spawn-egg, breeding, command, and plugin-custom origins fail closed unless explicitly allowed by configuration.
-- **Builder:** a bounded TTL cache prevents rapid repeated credit at the same position.
-- **Brewer:** a completed batch earns only when it can be attributed to a recent player interaction with that brewing stand.
-- **Explorer:** discovery is sampled periodically and persisted in player PDC; no `PlayerMoveEvent` listener is used.
-- **Crafter:** Paper's post-craft result event is used so the credited result is the item actually taken by the player.
-
-Activity safety/cache/sampling settings are restart-only. Reward tables, messages, and feedback presentation remain safely reloadable.
-
-## Player UX
-
-`/jobs` opens a compact interactive browser:
-
-- 36-slot overview and 27-slot details/confirmation views;
-- custom `InventoryHolder` identity and explicit slot actions;
-- centralized click/drag protection;
-- direct join/leave actions;
-- confirmation before progression-resetting leaves;
-- Adventure/MiniMessage text through `messages.yml`.
-
-## Persistence and economy
-
-Profiles, daily caps, SHADOW totals, and Vault payouts retain the 1.1 safety contracts:
-
-- transient profile-load failures retry after bounded backoff;
-- `player_jobs` saves are exact transactional snapshots;
-- obsolete job IDs reconcile only after a runtime configuration is accepted;
-- same-day caps hydrate asynchronously and fail closed until ready;
-- daily snapshots use revision guards against stale completion;
-- SHADOW batches are atomic;
-- Vault provider discovery refreshes during payout flushes;
-- graceful shutdown establishes final persistence barriers.
-
-Cross-process exactly-once Vault payout semantics are **not claimed** because Vault exposes no idempotent transaction identifier. Daily-cap abrupt-crash exactness is also **not claimed** because snapshots are coalesced rather than synchronously journaled per reward.
+All inventory pages use a custom `InventoryHolder`, explicit slot actions and centralized click/drag routing. Titles, item names and lore are presentation only and are never used as behavior identity. GUIs use already-loaded memory state and show loading/error states instead of fake zeroes.
 
 ## Configuration
 
-`jobs.yml` defines activity rewards by activity name and key. Non-break activities support exact keys and `*` fallback entries. Examples:
-
 ```yaml
-jobs:
-  hunter:
-    enabled: true
-    kill:
-      ZOMBIE: { money: 0.30, xp: 4 }
+performance:
+  dynamic-listeners: true
+  dynamic-core-block-subscription: true
+  feedback-flush-ticks: 3
 
-  explorer:
-    enabled: true
-    explore:
-      "*": { money: 3.00, xp: 40 }
+activity:
+  hunter:
+    origin-tracking: MEMORY
 ```
 
-`/jobsadmin reload` remains fail-closed: candidate `config.yml`, `jobs.yml`, and `messages.yml` are parsed and compiled before the accepted runtime is replaced.
+The tuning surface is intentionally small. `/jobsadmin reload` remains fail-closed: YAML validation, route compilation and candidate topology derivation complete before accepted runtime replacement.
+
+## Diagnostics
+
+`/jobsadmin diagnostics` exposes activity seen/rejection/match/grant counters, family-listener states, Core subscription state/material count, public-event demand gating, feedback accumulations/visual flushes/dirty players, persistence/economy state and Explorer/Hunter status. Per-reward logging is intentionally absent.
 
 ## Commands
 
-Player: `/jobs`, `/jobs browse`, `/jobs info <job>`, `/jobs join <job>`, `/jobs leave <job> [confirm]`, `/jobs leaveall [confirm]`, `/jobs stats [player]`, `/jobs earnings`.
+Player: `/jobs`, `/jobs browse`, `/jobs profile`, `/jobs <job>`, `/jobs info <job>`, `/jobs join <job>`, `/jobs leave <job> [confirm]`, `/jobs leaveall [confirm]`, `/jobs stats [player]`, `/jobs earnings`.
 
-Admin: `/jobsadmin diagnostics`, `/jobsadmin reload`, `/jobsadmin payout retry`, `/jobsadmin migration <scan|plan|status|execute>`, `/jobsadmin simulate <job> <material> <count>`, `/jobsadmin backup`.
+Admin: `/jobsadmin diagnostics`, `/jobsadmin reload`, `/jobsadmin payout retry`, `/jobsadmin migration <scan|plan|status|execute>`, `/jobsadmin simulate <job> <activity> <key> <count>`, `/jobsadmin backup`.
 
-Jobs Reborn migration execution remains fail-closed until its actual source schema is inspected and rehearsed against a backup.
-
-## Build and release
+## Build and stable delivery
 
 ```bash
 ./gradlew --no-daemon clean test check javadoc shadowJar verifyDistribution
 ```
 
-Stable publication is exact-main gated. The release workflow rebuilds merged `main`, verifies source contracts and distribution contents, publishes `v2.0.0` as a normal/latest release, then re-downloads the public JAR/checksum/test/provenance assets and verifies them.
+`2.5.0` is stable-only: no RC, prerelease or temporary public candidate tag is part of this release path. GitHub Build freezes the exact branch source, PR CI must pass unchanged, merged `main` is independently rebuilt, `release/stable` must fast-forward exactly to that final `main`, and the stable workflow rebuilds and re-verifies the published assets.
 
-See `docs/FULL_RELEASE_2.0.0.md`, `docs/RECOVERY.md`, and `docs/STABLE_RELEASE_GATES.md`.
+Rollback boundary: `v2.0.0` / `985244c61a3c07c70fb48b97ccb2883fb55149b5` / JAR SHA-256 `686710eed31a6c10e9d78cb7fccc7fdc355330a371a098ba3731940ef048ad0a`.
+
+Live PlexonCraft runtime certification is separate from GitHub source certification. Unless genuine live evidence is produced, provenance states `runtime_certification=NOT_EXECUTED`.
+
+See `docs/PERFORMANCE_ARCHITECTURE_2.5.0.md`, `docs/GUI_2.5.0.md`, `docs/FEATURE_VIABILITY_2.5.0.md`, `docs/STABLE_RELEASE_GATES.md`, `docs/RECOVERY.md`, and `.release/RELEASE_NOTES_2.5.0.md`.

@@ -1,6 +1,6 @@
 runtime:
-  # Stable 2.0 defaults to live rewards. Existing installations retain their current config.yml value on upgrade.
-  # DISABLED = no activity processing, SHADOW = calculate only, PRIMARY = mutate XP and accrue economy payouts.
+  # 2.5.0 keeps live rewards as the stable default. DISABLED = no activity, SHADOW = calculate only,
+  # PRIMARY = mutate XP/daily counters and accrue coalesced economy payouts.
   mode: PRIMARY
   core-api-range: ">=2.0 <3.0"
 
@@ -8,12 +8,19 @@ membership:
   default-max-jobs: 3
   keep-level-on-leave: true
 
+performance:
+  # Native activity-family listeners exist only while at least one online participant needs them.
+  dynamic-listeners: true
+  # PlexonCore receives only the union of break materials needed by active online break-job members.
+  dynamic-core-block-subscription: true
+  # One global bounded visual flush; reward callbacks only accumulate compact state.
+  feedback-flush-ticks: 3
+
 payout:
-  # PlexonJobs intentionally coalesces Vault deposits outside gameplay-event paths.
+  # Vault deposits remain outside gameplay-event paths and are coalesced.
   mode: COALESCED
   flush-ticks: 40
   max-commits-per-tick: 100
-  # Number of retry attempts after the initial failed deposit before the payout is blocked for admin review.
   retry-limit: 3
   money-scale: 2
 
@@ -31,17 +38,17 @@ gameplay:
 
 activity:
   hunter:
+    # MEMORY avoids PDC writes for every spawn. PERSISTENT_PDC trades more writes for origin survival across unload/restart.
+    origin-tracking: MEMORY
     # Unknown, spawner, egg, breeding, command and plugin-custom origins fail closed by default.
     allowed-spawn-reasons: [NATURAL, RAID, PATROL, TRAP, REINFORCEMENTS, NETHER_PORTAL, VILLAGE_INVASION]
   builder:
-    # Prevent rapid place/break loops from repeatedly earning at the same coordinates.
     repeat-window-seconds: 600
     max-tracked-positions: 4096
   brewer:
-    # Automated brewing without a recent player interaction does not earn job rewards.
     attribution-seconds: 90
   explorer:
-    # Periodic biome discovery sampling; no movement-event hot path.
+    # Samples only the compiled online Explorer participant collection; never PlayerMoveEvent.
     sample-ticks: 40
 
 feedback:

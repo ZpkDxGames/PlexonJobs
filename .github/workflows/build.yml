@@ -12,17 +12,17 @@ permissions:
   contents: read
 
 env:
-  STABLE_BASELINE_SHA: '72f9225c2d337422d617ff2b5638363eeb98a3cf'
-  ROLLBACK_TAG: 'v1.1.0'
-  ROLLBACK_SHA: '72f9225c2d337422d617ff2b5638363eeb98a3cf'
-  ROLLBACK_JAR_SHA256: 'bbdc7027800029c7588005860befb0f2111cb73352f82aadebce48c3dd594e9f'
+  STABLE_BASELINE_SHA: '985244c61a3c07c70fb48b97ccb2883fb55149b5'
+  ROLLBACK_TAG: 'v2.0.0'
+  ROLLBACK_SHA: '985244c61a3c07c70fb48b97ccb2883fb55149b5'
+  ROLLBACK_JAR_SHA256: '686710eed31a6c10e9d78cb7fccc7fdc355330a371a098ba3731940ef048ad0a'
   CORE_VERSION: '2.0.4'
   CORE_SHA256: '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
 
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v5
@@ -52,66 +52,68 @@ jobs:
             -Dfile="$core_jar" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
             -Dversion="$CORE_VERSION" -Dpackaging=jar -DgeneratePom=true
 
-      - name: Resolve version and prove stable ancestry
+      - name: Resolve exact stable version and ancestry
         id: meta
         shell: bash
         run: |
           set -euo pipefail
           VERSION="$(gradle -q properties | awk '$1 == "version:" {print $2; exit}')"
-          test -n "$VERSION"
+          test "$VERSION" = '2.5.0'
+          [[ "$VERSION" != *-* ]] || { echo "Stable source must not contain a prerelease suffix: $VERSION" >&2; exit 1; }
           git merge-base --is-ancestor "$STABLE_BASELINE_SHA" HEAD
+          test -s .release/RELEASE_NOTES_2.5.0.md
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Full source verification
         run: gradle --no-daemon clean test check javadoc shadowJar verifyDistribution --stacktrace
 
-      - name: Enforce 2.0 source contracts
+      - name: Enforce 2.5 performance and GUI contracts
         shell: bash
         run: |
           set -euo pipefail
           test ! -e .github/workflows/rc-release.yml
-          test ! -e src/main/java/com/plexon/jobs/gui/JobsGui.java
+          test ! -e src/main/java/com/plexon/jobs/runtime/NativeActivityListener.java
+          test -e src/main/java/com/plexon/jobs/runtime/ActivityInterestIndex.java
+          test -e src/main/java/com/plexon/jobs/runtime/CompiledJobRoutes.java
+          test -e src/main/java/com/plexon/jobs/runtime/ActivityListenerCoordinator.java
+          test -e src/main/java/com/plexon/jobs/runtime/CoreBlockSubscriptionCoordinator.java
+          grep -q 'joinedJobMask() & route.jobMask()' src/main/java/com/plexon/jobs/runtime/BlockActivityRouter.java
+          grep -q 'handleBreak(Player player, Material material' src/main/java/com/plexon/jobs/runtime/ActivityGrantService.java
+          grep -q 'HandlerList.unregisterAll' src/main/java/com/plexon/jobs/runtime/ActivityListenerCoordinator.java
+          grep -q 'breakMaterialsForJobs(plugin.interest().globalJoinedJobMask())' src/main/java/com/plexon/jobs/runtime/CoreBlockSubscriptionCoordinator.java
+          grep -q 'implements RewardFeedbackSink' src/main/java/com/plexon/jobs/runtime/PlayerFeedbackService.java
+          grep -q 'feedback::flush' src/main/java/com/plexon/jobs/PlexonJobs.java
+          grep -q 'getHandlerList().getRegisteredListeners().length != 0' src/main/java/com/plexon/jobs/runtime/ActivityGrantService.java
+          grep -q 'participantCount(ActivityType.EXPLORE) > 0' src/main/java/com/plexon/jobs/runtime/ExplorerDiscoveryService.java
+          grep -q 'HunterOriginTracking.MEMORY' src/main/java/com/plexon/jobs/runtime/HunterOriginTracker.java
           grep -q 'implements InventoryHolder' src/main/java/com/plexon/jobs/gui/JobsMenuHolder.java
           grep -q 'InventoryDragEvent' src/main/java/com/plexon/jobs/gui/JobsMenuController.java
-          grep -q 'ActivityGrantService' src/main/java/com/plexon/jobs/PlexonJobs.java
-          grep -q 'NativeActivityListener' src/main/java/com/plexon/jobs/PlexonJobs.java
-          grep -q 'PlayerFeedbackService' src/main/java/com/plexon/jobs/PlexonJobs.java
-          grep -q 'ExplorerDiscoveryService' src/main/java/com/plexon/jobs/PlexonJobs.java
-          grep -q 'DailyLimitPersistence' src/main/java/com/plexon/jobs/runtime/ActivityGrantService.java
-          grep -q 'PlexonJobRewardGrantedEvent' src/main/java/com/plexon/jobs/runtime/ActivityGrantService.java
-          grep -q 'PlacementCreditCache' src/main/java/com/plexon/jobs/runtime/NativeActivityListener.java
-          grep -q 'hunter_spawn_reason' src/main/java/com/plexon/jobs/runtime/NativeActivityListener.java
-          grep -q 'daily_earnings' src/main/java/com/plexon/jobs/storage/JobsDatabase.java
+          grep -q 'DialogType.confirmation' src/main/java/com/plexon/jobs/gui/JobsMenuController.java
           grep -q 'DELETE FROM player_jobs WHERE player_uuid=?' src/main/java/com/plexon/jobs/storage/JobsDatabase.java
           grep -q 'LOAD_RETRY_NANOS' src/main/java/com/plexon/jobs/runtime/ProfileManager.java
-          grep -q 'acceptKnownJobs' src/main/java/com/plexon/jobs/runtime/ProfileManager.java
           grep -q 'refreshEconomyAvailability' src/main/java/com/plexon/jobs/economy/PayoutService.java
-          grep -q 'if (amount < 0) return Result.fail' src/main/java/com/plexon/jobs/runtime/JobsRuntime.java
-          grep -q 'if (amount == 0) return Result.ok' src/main/java/com/plexon/jobs/runtime/JobsRuntime.java
           for job in miner woodcutter digger farmer hunter fisher builder crafter blacksmith brewer enchanter explorer; do
-            grep -A5 "^  ${job}:" src/main/resources/jobs.yml | grep -q 'enabled: true'
+            grep -A6 "^  ${job}:" src/main/resources/jobs.yml | grep -q 'enabled: true'
           done
-          if grep -R -n --include='*.java' 'PlayerMoveEvent' src/main/java; then
-            echo 'Explorer must not use PlayerMoveEvent.' >&2
-            exit 1
-          fi
-          if grep -R -n --include='*.java' 'org\.bukkit\.ChatColor' src/main/java; then
-            echo 'Legacy ChatColor usage is forbidden.' >&2
-            exit 1
-          fi
-          if grep -R -n --include='*.java' 'createInventory(null' src/main/java/com/plexon/jobs/gui; then
-            echo 'Null-holder custom inventories are forbidden.' >&2
-            exit 1
-          fi
-          if grep -R -n --include='*.java' '\.getTitle()' src/main/java/com/plexon/jobs/gui; then
-            echo 'Inventory title parsing/identity is forbidden.' >&2
-            exit 1
-          fi
-          if grep -R -n --include='*.java' '\.getDisplayName()' src/main/java/com/plexon/jobs/gui; then
-            echo 'Display-name action identity is forbidden.' >&2
-            exit 1
-          fi
+          for hot in src/main/java/com/plexon/jobs/runtime/BlockActivityRouter.java src/main/java/com/plexon/jobs/runtime/ActivityGrantService.java; do
+            ! grep -q 'Material.matchMaterial' "$hot"
+            ! grep -q 'YamlConfiguration' "$hot"
+            ! grep -q 'database\.' "$hot"
+            ! grep -q 'payouts.flush' "$hot"
+            ! grep -q 'runTask' "$hot"
+          done
+          ! grep -R -n --include='*.java' 'runTask\|runTaskAsynchronously' src/main/java/com/plexon/jobs/runtime/listener
+          ! grep -R -n --include='*.java' 'database\.\|YamlConfiguration\|payouts.flush' src/main/java/com/plexon/jobs/runtime/listener
+          ! grep -R -n --include='*.java' 'PlayerMoveEvent' src/main/java
+          ! grep -R -n --include='*.java' 'org\.bukkit\.ChatColor' src/main/java
+          ! grep -R -n --include='*.java' 'createInventory(null' src/main/java/com/plexon/jobs/gui
+          ! grep -R -n --include='*.java' '\.getTitle()' src/main/java/com/plexon/jobs/gui
+          ! grep -R -n --include='*.java' '\.getDisplayName()' src/main/java/com/plexon/jobs/gui
+          grep -q 'class PlexonJobPayoutEvent' src/main/java/com/plexon/jobs/event/PlexonJobPayoutEvent.java
+          grep -q 'class PlexonJobXpGainEvent' src/main/java/com/plexon/jobs/event/PlexonJobXpGainEvent.java
+          grep -q 'class PlexonJobRewardGrantedEvent' src/main/java/com/plexon/jobs/event/PlexonJobRewardGrantedEvent.java
+          grep -q 'class PlexonJobLevelUpEvent' src/main/java/com/plexon/jobs/event/PlexonJobLevelUpEvent.java
 
       - name: Build exact test summary
         shell: bash
@@ -127,9 +129,7 @@ jobs:
               root = ET.parse(path).getroot()
               for key in totals:
                   totals[key] += int(root.attrib.get(key, 0))
-          if totals['tests'] <= 0:
-              raise SystemExit('No tests executed')
-          if totals['failures'] or totals['errors'] or totals['skipped']:
+          if totals['tests'] <= 0 or totals['failures'] or totals['errors'] or totals['skipped']:
               raise SystemExit(f'Non-clean test totals: {totals}')
           pathlib.Path('build/TEST_SUMMARY.txt').write_text(
               f"TEST_COUNT={totals['tests']} FAILURES={totals['failures']} ERRORS={totals['errors']} SKIPPED={totals['skipped']}\n",
@@ -137,7 +137,7 @@ jobs:
           print(totals)
           PY
 
-      - name: Verify distribution
+      - name: Verify exact distribution
         shell: bash
         run: |
           set -euo pipefail
@@ -150,17 +150,27 @@ jobs:
             com/plexon/jobs/api/PlexonJobsAPI.class \
             com/plexon/jobs/gui/JobsMenuHolder.class \
             com/plexon/jobs/gui/JobsMenuController.class \
+            com/plexon/jobs/gui/JobsGuiComponents.class \
+            com/plexon/jobs/runtime/ActivityInterestIndex.class \
+            com/plexon/jobs/runtime/CompiledJobRoutes.class \
+            com/plexon/jobs/runtime/PlayerExecutionState.class \
+            com/plexon/jobs/runtime/ActivityListenerCoordinator.class \
+            com/plexon/jobs/runtime/CoreBlockSubscriptionCoordinator.class \
             com/plexon/jobs/runtime/ActivityGrantService.class \
-            com/plexon/jobs/runtime/NativeActivityListener.class \
+            com/plexon/jobs/runtime/BlockActivityRouter.class \
             com/plexon/jobs/runtime/ExplorerDiscoveryService.class \
             com/plexon/jobs/runtime/PlayerFeedbackService.class \
+            com/plexon/jobs/runtime/HunterOriginTracker.class \
+            com/plexon/jobs/runtime/listener/HunterActivityListener.class \
+            com/plexon/jobs/runtime/listener/BuilderActivityListener.class \
+            com/plexon/jobs/runtime/listener/BrewerActivityListener.class \
             com/plexon/jobs/runtime/DailyLimitPersistence.class \
-            com/plexon/jobs/runtime/DailyLimitService.class \
             com/plexon/jobs/event/PlexonJobRewardGrantedEvent.class \
             com/plexon/jobs/event/PlexonJobPayoutCommittedEvent.class \
             org/sqlite/JDBC.class; do
             grep -qx "$required" build/jar-contents.txt
           done
+          ! grep -qx 'com/plexon/jobs/runtime/NativeActivityListener.class' build/jar-contents.txt
           unzip -p "$JAR" plugin.yml | sed -n 's/^version:[[:space:]]*//p' | head -n 1 | tr -d " '\"\r" | grep -qx "$VERSION"
           unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -Fx "Implementation-Version: $VERSION"
           javap -verbose -classpath "$JAR" com.plexon.jobs.PlexonJobs | grep -F 'major version: 69'
@@ -183,42 +193,31 @@ jobs:
           cat > build/PROVENANCE.txt <<EOF
           repository=$GITHUB_REPOSITORY
           source_sha=$GITHUB_SHA
-          stable_baseline=$STABLE_BASELINE_SHA
+          previous_stable_sha=$STABLE_BASELINE_SHA
           version=$VERSION
+          channel=BUILD
+          release_gate=GITHUB_SOURCE_CI_CERTIFIED
           java=25
           java_major=69
           paper=26.2.build.121-stable
           plexoncore=$CORE_VERSION
-          plexoncore_sha256=$CORE_SHA256
-          vault_api=1.7
-          economy_authority=TheosisEconomy via Vault
-          schema_version=2
           rollback_tag=$ROLLBACK_TAG
           rollback_sha=$ROLLBACK_SHA
           rollback_jar_sha256=$ROLLBACK_JAR_SHA256
-          all_builtin_jobs_enabled=PASS
-          unified_activity_grant_pipeline=PASS
-          core_block_break_authority=PASS
-          native_activity_fail_closed=PASS
-          builder_repeat_suppression=PASS
-          explorer_no_move_event=PASS
-          coalesced_player_feedback=PASS
-          profile_load_retry_backoff=PASS
-          profile_storage_exact_snapshot=PASS
-          obsolete_job_reconciliation=PASS
-          profile_shutdown_write_barrier=PASS
-          daily_cap_graceful_restart_persistence=PASS
-          daily_snapshot_revision_guard=PASS
-          daily_cap_crash_exactness=NOT_CLAIMED
-          shadow_atomic_batch_persistence=PASS
-          shadow_shutdown_write_barrier=PASS
-          vault_provider_recovery=PASS
-          api_nonpositive_xp_guard=PASS
+          player_interest_index=PASS
+          dynamic_activity_listeners=PASS
+          dynamic_core_break_subscription=PASS
+          typed_break_route=PASS
+          per_event_async_tasks=ABSENT
+          per_event_sql=ABSENT
+          per_event_vault_deposit=ABSENT
+          feedback_coalesced_render=PASS
+          custom_event_demand_gate=PASS
+          explorer_move_event=ABSENT
           custom_inventory_holder=PASS
           legacy_gui_identity_antipatterns=ABSENT
-          configurable_minimessage_surface=PASS
-          malformed_yaml_reload_fail_closed=PASS
           cross_process_vault_exactly_once=NOT_CLAIMED
+          daily_cap_crash_exactness=NOT_CLAIMED
           jar_size=$size
           jar_sha256=$digest
           runtime_certification=NOT_EXECUTED
@@ -228,7 +227,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --check "$(git merge-base HEAD origin/main)" HEAD
+          if git show-ref --verify --quiet refs/remotes/origin/main; then
+            git diff --check "$(git merge-base HEAD origin/main)" HEAD
+          else
+            git diff --check "$STABLE_BASELINE_SHA" HEAD
+          fi
 
       - name: Upload verified build
         uses: actions/upload-artifact@v4

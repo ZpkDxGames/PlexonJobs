@@ -24,12 +24,15 @@ public final class JobsRuntime implements PlexonJobsAPI {
     private final JobRegistry registry;
     private final JobsConfig config;
     private final PayoutService payouts;
+    private final ActivityInterestIndex interest;
 
-    public JobsRuntime(ProfileManager profiles, JobRegistry registry, JobsConfig config, PayoutService payouts) {
+    public JobsRuntime(ProfileManager profiles, JobRegistry registry, JobsConfig config,
+                       PayoutService payouts, ActivityInterestIndex interest) {
         this.profiles = profiles;
         this.registry = registry;
         this.config = config;
         this.payouts = payouts;
+        this.interest = interest;
     }
 
     public ProfileManager profiles() { return profiles; }
@@ -89,6 +92,7 @@ public final class JobsRuntime implements PlexonJobsAPI {
         if (profile.activeCount() >= maxJobs(playerId)) return Result.fail("Maximum active jobs reached");
         progress.joined(true);
         profiles.markDirty(playerId);
+        interest.refresh(playerId);
         Bukkit.getPluginManager().callEvent(new PlexonJobJoinEvent(playerId, id));
         return Result.ok("Joined " + id);
     }
@@ -104,6 +108,7 @@ public final class JobsRuntime implements PlexonJobsAPI {
         progress.joined(false);
         if (!config.keepLevelOnLeave()) progress.setTotalXp(0, registry.curve(id));
         profiles.markDirty(playerId);
+        interest.refresh(playerId);
         Bukkit.getPluginManager().callEvent(new PlexonJobLeaveEvent(playerId, id));
         return Result.ok("Left " + id);
     }
@@ -128,8 +133,7 @@ public final class JobsRuntime implements PlexonJobsAPI {
     }
 
     @Override public Collection<JobView> jobDefinitions() {
-        return registry.definitions().stream().map(job -> new JobView(job.id(), job.displayName(),
-                job.icon().name(), job.enabled(), job.maxLevel())).toList();
+        return registry.definitions().stream().map(job -> new JobView(job.id(), job.displayName(), job.icon().name(), job.enabled(), job.maxLevel())).toList();
     }
 
     @Override public long pendingPayout(UUID playerId) { return payouts.pending(playerId); }
@@ -138,9 +142,7 @@ public final class JobsRuntime implements PlexonJobsAPI {
         var player = Bukkit.getPlayer(playerId);
         if (player != null && player.hasPermission("plexonjobs.maxjobs.unlimited")) return Integer.MAX_VALUE;
         int max = config.defaultMaxJobs();
-        if (player != null) {
-            for (int i = 1; i <= 64; i++) if (player.hasPermission("plexonjobs.maxjobs." + i)) max = Math.max(max, i);
-        }
+        if (player != null) for (int i = 1; i <= 64; i++) if (player.hasPermission("plexonjobs.maxjobs." + i)) max = Math.max(max, i);
         return max;
     }
 
