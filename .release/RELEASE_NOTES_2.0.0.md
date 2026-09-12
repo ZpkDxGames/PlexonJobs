@@ -12,10 +12,10 @@ PlexonJobs 2.0.0 completes the PlexonCraft jobs product: every built-in job fami
 - **Fisher** — successful fishing catches, including fish and configured treasure/junk results.
 - **Builder** — configured block placements with bounded same-position repeat-credit suppression.
 - **Crafter** — Paper post-craft result events using the actual crafted result stack.
-- **Blacksmith** — furnace extraction, smithing result collection, and Mending repair activity.
+- **Blacksmith** — furnace extraction, smithing result collection, Mending repair activity, and real anvil repair/combination output pickup. Rename-only anvil operations are excluded.
 - **Brewer** — completed brewing batches attributed to a recent player interaction with that stand; unattributed automation earns nothing.
 - **Enchanter** — successful enchant operations, scaled by enchant level cost.
-- **Explorer** — first biome/environment discoveries sampled periodically and persisted in player PDC; no `PlayerMoveEvent` hot path.
+- **Explorer** — first biome/environment discoveries sampled periodically and persisted in player PDC; no movement-event hot path.
 
 ## Unified reward pipeline
 
@@ -40,6 +40,7 @@ Existing `messages.yml` files inherit safe embedded defaults for the new feedbac
 
 - Builder placement-credit memory is TTL-bound and size-bound per player.
 - Hunter origin tagging is stored on living entities using plugin PDC and unknown origins fail closed.
+- Anvil rewards require the result slot, a real second input, and a non-empty output, preventing rename-only reward farming.
 - Brewing attribution is bounded and expires quickly.
 - Explorer discoveries are finite and persistent without movement-event listeners.
 - Activity cache/sampling safety settings are restart-only; reward tables/messages/feedback presentation remain reloadable.
