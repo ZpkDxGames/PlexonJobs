@@ -1,5 +1,7 @@
 # PlexonJobs 1.0 architecture and operations
 
+> Historical stable-1.0 architecture baseline. The `1.1.0-rc.1` full revamp keeps these Core-native runtime/payout contracts but supersedes the player UI, message surface, API registration lifecycle and the process-local daily-cap limitation. See `FULL_REVAMP_1.1.0.md` and the repository README for the current candidate contract.
+
 ## Ownership and dependencies
 
 PlexonJobs owns job membership, job XP/levels, eligible-work evaluation, job payout accrual, job anti-exploit policy, job UI/admin state, persistence, API/events, PlaceholderAPI, and controlled import tooling. TheosisEconomy owns balances through Vault. PlexonSkills owns skills; PlexonQuests owns quests; PlexonSpawners/Core own their provenance domains.
@@ -44,7 +46,7 @@ Scheduled shadow IO is tracked through a settled future that includes the failur
 
 SQLite runs WAL/NORMAL and uses prepared statements. Schema version is stored in `migration_meta`; absent/older supported state initializes idempotently to schema 2, while any future schema fails closed. Gameplay never accesses SQLite directly.
 
-Daily limits are authoritative in memory for the active process/day and maintain both per-job and per-player aggregate counters. The existing `daily_earnings` table is reserved for any future persisted-cap contract rather than being silently treated as implemented.
+In stable 1.0, daily limits were authoritative only in memory for the active process/day and `daily_earnings` was reserved. **This paragraph is superseded in 1.1.0-rc.1:** the existing schema-2 table now stores asynchronously hydrated/coalesced absolute same-day counter snapshots so caps survive graceful restarts without introducing SQL to the work-event hot path.
 
 ## Reload
 
