@@ -39,7 +39,12 @@ public final class PayoutService {
 
     public int flush(int maxPlayers) {
         if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Vault payouts must run on the primary thread");
-        if (!economy.available()) return 0;
+        try {
+            if (!refreshEconomyAvailability()) return 0;
+        } catch (RuntimeException failure) {
+            plugin.getLogger().warning("Failed to refresh Vault economy provider: " + failure.getMessage());
+            return 0;
+        }
         int limit = Math.max(1, maxPlayers);
         int committed = 0;
         for (UUID playerId : ledger.readyPlayers(limit * 2)) {
@@ -63,17 +68,23 @@ public final class PayoutService {
             } else {
                 ledger.fail(snapshot);
                 metrics.failedDeposit();
-                int attempts = failures.merge(playerId, 1, Integer::sum);
-                if (attempts > retryLimit) {
+                int failuresSeen = failures.merge(playerId, 1, Integer::sum);
+                if (failuresSeen > retryLimit) {
                     blocked.add(playerId);
                     plugin.getLogger().severe("Payout retries exhausted for " + playerId + "; money remains pending. Last error: " + result.detail());
                 } else {
-                    plugin.getLogger().warning("Vault payout failed for " + playerId + " (attempt " + attempts + "/" + retryLimit + "): " + result.detail());
+                    plugin.getLogger().warning("Vault payout failed for " + playerId + "; retry " + failuresSeen + "/" + retryLimit +
+                            " will be attempted. Error: " + result.detail());
                 }
             }
         }
         metrics.payoutFlush(committed);
         return committed;
+    }
+
+    boolean refreshEconomyAvailability() {
+        economy.refresh();
+        return economy.available();
     }
 
     public void retry(UUID playerId) {
