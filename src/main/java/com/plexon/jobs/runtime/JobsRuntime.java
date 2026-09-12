@@ -111,13 +111,15 @@ public final class JobsRuntime implements PlexonJobsAPI {
     @Override
     public Result addJobXp(UUID playerId, String jobId, long amount, String source) {
         if (!Bukkit.isPrimaryThread()) return Result.fail("addJobXp must run on the primary thread");
+        if (amount < 0) return Result.fail("XP amount must be >= 0");
         String id = normalize(jobId);
         JobDefinition definition = registry.find(id).orElse(null);
         if (definition == null) return Result.fail("Unknown job: " + id);
         PlayerJobsProfile profile = profiles.ensure(playerId);
         if (profile.state() != PlayerJobsProfile.State.READY) return Result.fail("Jobs profile is still loading");
+        if (amount == 0) return Result.ok("XP unchanged");
         JobProgress progress = profile.progress(id);
-        JobProgress.ProgressDelta delta = progress.addXp(Math.max(0, amount), registry.curve(id));
+        JobProgress.ProgressDelta delta = progress.addXp(amount, registry.curve(id));
         profiles.markDirty(playerId);
         Bukkit.getPluginManager().callEvent(new PlexonJobXpGainEvent(playerId, id, amount, progress.totalXp(), source));
         if (delta.leveledUp()) Bukkit.getPluginManager().callEvent(new PlexonJobLevelUpEvent(playerId, id,
