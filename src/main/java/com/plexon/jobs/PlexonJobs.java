@@ -5,11 +5,13 @@ import com.plexon.jobs.command.JobsAdminCommand;
 import com.plexon.jobs.command.JobsCommand;
 import com.plexon.jobs.config.ConfigLoader;
 import com.plexon.jobs.config.JobsConfig;
+import com.plexon.jobs.config.Messages;
 import com.plexon.jobs.economy.JobsEconomy;
 import com.plexon.jobs.economy.PayoutService;
 import com.plexon.jobs.economy.PendingPayoutLedger;
 import com.plexon.jobs.economy.UnavailableJobsEconomy;
 import com.plexon.jobs.economy.VaultJobsEconomy;
+import com.plexon.jobs.gui.JobsMenuController;
 import com.plexon.jobs.integration.PlexonJobsExpansion;
 import com.plexon.jobs.migration.LegacyJobsMigration;
 import com.plexon.jobs.runtime.BlockActivityRouter;
@@ -54,10 +56,12 @@ public final class PlexonJobs extends JavaPlugin {
     private volatile PayoutService payouts;
     private volatile JobsRuntime runtime;
     private volatile BlockActivityRouter blockRouter;
+    private volatile Messages messages;
     private AutoCloseable blockSubscription;
     private final List<BukkitTask> tasks = new ArrayList<>();
     private PlexonJobsExpansion expansion;
     private LegacyJobsMigration migration;
+    private JobsMenuController menus;
 
     @Override
     public void onEnable() {
@@ -85,6 +89,11 @@ public final class PlexonJobs extends JavaPlugin {
             AutoCloseable subscription = subscribeBlockBreaks(prepared.registry(), prepared.router());
             installPrepared(prepared);
             blockSubscription = subscription;
+
+            // The API contract must exist on an ordinary initial enable, not only after reload.
+            registerApiService();
+            menus = new JobsMenuController(this);
+            Bukkit.getPluginManager().registerEvents(menus, this);
             registerCommands();
             registerModule();
             registerPlaceholderApi();
@@ -139,6 +148,7 @@ public final class PlexonJobs extends JavaPlugin {
         JobsRuntime previousRuntime = runtime;
         PayoutService previousPayouts = payouts;
         BlockActivityRouter previousRouter = blockRouter;
+        Messages previousMessages = messages;
 
         try {
             cancelTasks();
@@ -159,6 +169,7 @@ public final class PlexonJobs extends JavaPlugin {
             runtime = previousRuntime;
             payouts = previousPayouts;
             blockRouter = previousRouter;
+            messages = previousMessages;
             blockSubscription = subscribeBlockBreaks(previousRuntime.registry(), previousRouter);
             registerApiService();
             registerPlaceholderApi();
@@ -178,13 +189,14 @@ public final class PlexonJobs extends JavaPlugin {
         PayoutService nextPayouts = new PayoutService(this, economy, pendingLedger, metrics, config.moneyScale(), config.retryLimit());
         JobsRuntime nextRuntime = new JobsRuntime(profiles, registry, config, nextPayouts);
         BlockActivityRouter nextRouter = new BlockActivityRouter(config, registry, profiles, limits, nextPayouts, shadow, metrics);
-        return new PreparedRuntime(registry, config, nextPayouts, nextRuntime, nextRouter);
+        return new PreparedRuntime(registry, config, nextPayouts, nextRuntime, nextRouter, loaded.messages());
     }
 
     private void installPrepared(PreparedRuntime prepared) {
         payouts = prepared.payouts();
         runtime = prepared.runtime();
         blockRouter = prepared.router();
+        messages = prepared.messages();
     }
 
     private JobsEconomy createEconomy() {
@@ -234,7 +246,7 @@ public final class PlexonJobs extends JavaPlugin {
     private void registerPlaceholderApi() {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) return;
         try {
-            expansion = new PlexonJobsExpansion(runtime, limits);
+            expansion = new PlexonJobsExpansion(runtime, limits, getPluginMeta().getVersion());
             if (!expansion.register()) {
                 getLogger().warning("PlaceholderAPI rejected the PlexonJobs expansion registration.");
                 expansion = null;
@@ -357,7 +369,9 @@ public final class PlexonJobs extends JavaPlugin {
     public ShadowLedger shadow() { return shadow; }
     public JobsMetrics metrics() { return metrics; }
     public LegacyJobsMigration migration() { return migration; }
+    public Messages messages() { return messages; }
+    public JobsMenuController menus() { return menus; }
 
     private record PreparedRuntime(JobRegistry registry, JobsConfig config, PayoutService payouts,
-                                   JobsRuntime runtime, BlockActivityRouter router) {}
+                                   JobsRuntime runtime, BlockActivityRouter router, Messages messages) {}
 }
