@@ -11,7 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
 
-/** Periodic Explorer sampler; deliberately avoids PlayerMoveEvent and stores the finite discovery set in player PDC. */
+/** Periodic Explorer sampler; deliberately avoids a movement-event hot path and stores discoveries in player PDC. */
 public final class ExplorerDiscoveryService {
     private static final int MAX_DISCOVERIES = 512;
     private final PlexonJobs plugin;
