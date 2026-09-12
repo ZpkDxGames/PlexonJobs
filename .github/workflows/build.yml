@@ -66,6 +66,32 @@ jobs:
       - name: Full source verification
         run: gradle --no-daemon clean test check javadoc shadowJar verifyDistribution --stacktrace
 
+      - name: Enforce revamp source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e src/main/java/com/plexon/jobs/gui/JobsGui.java
+          grep -q 'implements InventoryHolder' src/main/java/com/plexon/jobs/gui/JobsMenuHolder.java
+          grep -q 'InventoryDragEvent' src/main/java/com/plexon/jobs/gui/JobsMenuController.java
+          grep -q 'DailyLimitPersistence' src/main/java/com/plexon/jobs/runtime/BlockActivityRouter.java
+          grep -q 'daily_earnings' src/main/java/com/plexon/jobs/storage/JobsDatabase.java
+          if grep -R -n --include='*.java' 'org\.bukkit\.ChatColor' src/main/java; then
+            echo 'Legacy ChatColor usage is forbidden in the 1.1 player/admin surface.' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.java' 'createInventory(null' src/main/java/com/plexon/jobs/gui; then
+            echo 'Null-holder custom inventories are forbidden.' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.java' '\.getTitle()' src/main/java/com/plexon/jobs/gui; then
+            echo 'Inventory title parsing/identity is forbidden.' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.java' '\.getDisplayName()' src/main/java/com/plexon/jobs/gui; then
+            echo 'Display-name action identity is forbidden.' >&2
+            exit 1
+          fi
+
       - name: Build exact test summary
         shell: bash
         run: |
@@ -101,6 +127,10 @@ jobs:
             plugin.yml \
             com/plexon/jobs/PlexonJobs.class \
             com/plexon/jobs/api/PlexonJobsAPI.class \
+            com/plexon/jobs/gui/JobsMenuHolder.class \
+            com/plexon/jobs/gui/JobsMenuController.class \
+            com/plexon/jobs/runtime/DailyLimitPersistence.class \
+            com/plexon/jobs/runtime/DailyLimitService.class \
             com/plexon/jobs/event/PlexonJobPayoutCommittedEvent.class \
             org/sqlite/JDBC.class; do
             grep -qx "$required" build/jar-contents.txt
@@ -141,8 +171,13 @@ jobs:
           rollback_sha=$ROLLBACK_SHA
           rollback_jar_sha256=$ROLLBACK_JAR_SHA256
           profile_shutdown_write_barrier=PASS
+          daily_cap_restart_persistence=PASS
+          daily_snapshot_revision_guard=PASS
           shadow_atomic_batch_persistence=PASS
           shadow_shutdown_write_barrier=PASS
+          custom_inventory_holder=PASS
+          legacy_gui_identity_antipatterns=ABSENT
+          configurable_minimessage_surface=PASS
           malformed_yaml_reload_fail_closed=PASS
           cross_process_vault_exactly_once=NOT_CLAIMED
           jar_size=$size
