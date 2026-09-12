@@ -2,9 +2,9 @@
 
 Baseline: `v1.0.0` / `24b8e61950cb3a01112351e19c733d9a80953a03`
 
-Target line: `1.1.0-rc.1`
+Stable target: `1.1.0`
 
-This document records the repository-wide audit required by the Plexon Plugin Full Revamp Standard. The revamp keeps the proven Core-native runtime and stable rollback boundary while addressing player UX, configuration reachability, persistence correctness and maintainability.
+This document records the repository-wide audit required by the Plexon Plugin Full Revamp Standard. The revamp keeps the proven Core-native runtime and previous stable rollback boundary while addressing player UX, configuration reachability, persistence correctness, recovery and maintainability.
 
 ## Architecture map
 
@@ -12,7 +12,7 @@ This document records the repository-wide audit required by the Plexon Plugin Fu
 - `runtime` — compiled job registry, Core block-break routing, profiles, daily limits, metrics and shadow accounting.
 - `economy` — fixed-minor-unit pending ledger and bounded/coalesced Vault commits.
 - `storage` — SQLite/WAL schema and transactional persistence.
-- `gui` — player job browsing surface.
+- `gui` — holder-identified player job browsing/action surface.
 - `command` — player/admin entry points.
 - `integration` — PlaceholderAPI cache/index-only reads.
 - `migration` — fail-closed legacy Jobs discovery/plan tooling.
@@ -20,81 +20,85 @@ This document records the repository-wide audit required by the Plexon Plugin Fu
 
 ## Feature viability matrix
 
-| Feature | Player value | Runtime / exploit risk | Decision |
+| Feature | Player value | Runtime / exploit risk | Stable decision |
 | --- | --- | --- | --- |
 | Miner / Woodcutter / Digger | High | Low with Core natural-origin provenance | **Keep** |
-| Farmer / Hunter / Fisher / Builder / Crafter / Blacksmith / Brewer / Enchanter / Explorer | Potentially high | High if implemented with duplicate/fallback high-frequency listeners or ambiguous provenance | **Keep definitions disabled** until an authoritative shared context exists |
+| Farmer / Hunter / Fisher / Builder / Crafter / Blacksmith / Brewer / Enchanter / Explorer | Potentially high | High without authoritative shared context | **Keep definitions disabled** |
 | Core-native material routing | High | Low; indexed and allocation-bounded | **Keep** |
 | SHADOW / PRIMARY / DISABLED rollout | High operational value | Low | **Keep** |
-| Coalesced Vault payouts | High | Vault cannot provide cross-process idempotency keys | **Keep**, retain explicit exactly-once limitation |
-| SQLite profile/shadow persistence | High | Low after 1.0 shutdown/atomicity fixes | **Keep** |
-| Daily money/XP caps | High economy-safety value | Current process-local state resets on restart | **Redesign**: persist same-day counters using the existing `daily_earnings` table without putting SQL on the work-event path |
-| `/jobs` browse GUI | High discoverability | Current 54-slot null-holder display is non-interactive and legacy-text based | **Redesign** |
-| `/jobs join/leave/info/stats/earnings` | Useful fallback / accessibility | Low | **Keep**, make GUI the primary discoverable flow |
-| `/jobs top` placeholder | No current function | Misleading/dead command surface | **Remove** until a real async leaderboard exists |
-| `messages.yml` | High admin/localization value | Currently unreachable/dead configuration | **Activate** with fail-closed MiniMessage loading |
-| PlaceholderAPI | Useful integration | Low because current reads are cache/index-only | **Keep**, remove hard-coded plugin version |
+| Coalesced Vault payouts | High | Vault cannot provide cross-process idempotency keys | **Keep**, refresh provider discovery and retain exactly-once limitation |
+| SQLite profile persistence | High | Stale rows could survive old UPSERT-only snapshots | **Redesign** to exact transactional snapshots + accepted-registry reconciliation |
+| Profile async loading | High | Transient failure previously remained FAILED until restart | **Redesign** with bounded retry/backoff |
+| Daily money/XP caps | High economy-safety value | Process-local counters reset on restart in 1.0 | **Redesign** using existing `daily_earnings` table |
+| `/jobs` browse GUI | High discoverability | Old null-holder/display-only UI | **Redesign** |
+| `/jobs join/leave/info/stats/earnings` | Useful fallback | Low | **Keep** |
+| `/jobs top` placeholder | No current function | Misleading/dead surface | **Remove** |
+| `messages.yml` | High admin/localization value | Previously unreachable | **Activate** with fail-closed MiniMessage loading |
+| PlaceholderAPI | Useful integration | Low; cache/index only | **Keep**, runtime version dynamic |
+| Public XP mutation API | Integration value | Negative amount was internally clamped while event reported original value | **Harden**: reject negative, zero no-op |
 | Legacy Jobs migration execute | Potentially useful | High data-loss risk without verified source schema | **Keep fail-closed scan/plan only** |
-| Admin simulation/diagnostics | High operational value | Simulation already bounded/non-granting | **Keep** |
+| Admin simulation/diagnostics | High operational value | Simulation bounded/non-granting | **Keep** |
+| Dead default config sections | None | Misleading admin surface | **Remove** |
 
 ## Player UX redesign
 
-### Main jobs view
+The main jobs view is a compact 36-slot inventory with a custom `InventoryHolder` and explicit slot actions. All configured jobs remain visible so disabled future job families are understandable rather than silently missing.
 
-Use a compact 36-slot inventory with a custom `InventoryHolder` and explicit slot actions. All configured jobs remain visible so disabled future job families are understandable rather than silently missing.
+Each job icon communicates availability/current membership, level/XP progression, earned-today state, and an explicit click hint. Job details use a 27-slot view. Enabled jobs expose Join/Leave directly; disabled jobs expose explanation only. Leaving requires a separate confirmation view when progression would reset.
 
-Each job icon shows, in order:
+One listener/router handles the menu family. Custom-menu click/drag movement is cancelled, unknown slots are ignored, behavior identity comes from holder/session actions rather than title/name/lore parsing, and inventory transitions are deferred to a safe server execution point.
 
-1. availability/current membership state;
-2. level and XP progression;
-3. earned-today state;
-4. explicit click hint.
+Player-facing output uses Adventure components and MiniMessage-backed templates. Legacy `ChatColor` is absent from the 1.1 player/admin surface.
 
-Clicking a job opens a 27-slot detail view. Enabled jobs expose Join/Leave directly. Disabled jobs expose explanation only. Back and close positions remain predictable.
+## Persistence and recovery redesign
 
-When leaving would reset progression (`keep-level-on-leave: false`), a separate confirmation view is required before mutation.
+### Profiles
 
-### Event safety
+`player_jobs` is now written as an exact transaction: existing rows for a player are deleted inside the transaction and replaced by the current snapshot. This prevents a removed row from surviving a successful save.
 
-One listener/router handles the entire menu family. It cancels custom-menu click/drag movement, ignores unknown slots, uses holder/session action identity rather than title/name/lore parsing, and defers inventory transitions to a safe next-tick execution point.
+Loaded profiles are reconciled with the accepted job registry. Reconciliation is applied only after a runtime configuration becomes authoritative, so a failed reload cannot prune data according to an unaccepted candidate. Removed IDs advance profile revision and mark the profile dirty so SQLite converges to the accepted definition set.
 
-### Text
+Transient profile load failures fail closed and retry after bounded backoff instead of remaining permanently FAILED until restart.
 
-Player-facing output uses Adventure components and MiniMessage-backed configured templates. Legacy `ChatColor` and regex stripping of MiniMessage markup are removed from player UX.
+### Daily caps
 
-## Persistence redesign
+The existing schema-2 `daily_earnings` table is an implemented graceful-restart cap contract.
 
-The existing schema-2 `daily_earnings` table becomes an implemented contract rather than a reserved table.
+- Same-day counters hydrate asynchronously per player.
+- PRIMARY rewards fail closed until current-day state is ready.
+- Work-event processing remains memory-only.
+- Dirty snapshots are coalesced through Core IO.
+- Async saves carry a revision; stale completions cannot clear newer mutations.
+- Graceful shutdown waits for in-flight daily writes and saves final authoritative snapshots.
 
-- Same-day counters are hydrated asynchronously per player.
-- Work-event processing remains memory-only and rejects rewards until that player's daily state is ready.
-- Mutations mark a player daily snapshot dirty.
-- Dirty snapshots are coalesced into the existing periodic persistence cycle.
-- Async saves carry a revision; stale completions cannot clear newer dirty state.
-- Graceful shutdown waits for in-flight writes and writes final authoritative snapshots.
-- Day rollover clears in-memory counters without requiring per-event database access.
+Abrupt-crash exactness is not claimed because the counters are not synchronously journaled per reward.
 
-No database query/write is added to the block-break hot path.
+### Vault payouts
 
-## Command decisions
+Payouts remain fixed-minor-unit and coalesced. Vault provider discovery is refreshed before payout flushing, allowing temporary provider loss to recover without a PlexonJobs restart. Retry limits are defined as retry attempts after the initial failed deposit.
 
-The Bukkit command declarations remain for 1.1 because they are small, stable and compatible. Replacing them with Brigadier solely for modernization would add risk without enough player value. The revamp instead makes `/jobs` open the interactive UI, keeps useful direct subcommands as fallback paths, removes the dead `top` branch and keeps permission-aware admin commands.
+Vault still provides no plugin-supplied idempotent transaction identifier, so cross-process exactly-once payout semantics remain explicitly not claimed.
 
-A future Brigadier migration remains viable if command complexity grows enough to justify it.
+## Command / scheduler decisions
 
-## Scheduler / Folia decision
+The Bukkit command declarations remain because they are small, stable and compatible. Replacing them with Brigadier solely for modernization would add risk without enough player value.
 
-PlexonCore already supplies the async IO and primary-thread marshalling used by persistence. The two periodic Bukkit tasks remain centralized in the plugin lifecycle for this release. PlexonJobs does **not** declare Folia support. A future Folia release must move periodic/player/location work behind a verified scheduler abstraction and receive runtime testing before claiming support.
+PlexonCore supplies bounded IO execution and primary-thread marshalling for persistence. Periodic Bukkit tasks remain centralized in plugin lifecycle. PlexonJobs does **not** claim Folia support.
 
-## Verification gates
+## Stable verification gate
 
-The RC is not releasable until all of the following are true:
+Stable 1.1.0 requires:
 
-- Java 25 / Paper 26.2 clean build succeeds.
-- Existing runtime/economy/storage tests remain green.
-- New daily-cap persistence/restart tests pass.
-- New GUI holder/action tests cover identity and navigation contracts where feasible.
-- `verifyDistribution` passes and the installable JAR remains reproducible.
-- Branch CI reports zero failed/error/skipped tests.
-- Stable `v1.0.0` remains the rollback artifact and is never moved/replaced.
-- Live promotion remains separate from GitHub source verification and requires PlexonCraft startup, interaction and Spark evidence.
+- exact previous-stable ancestry;
+- Java 25 / Paper 26.2 / verified PlexonCore 2.0.4 build;
+- non-empty automated suite with zero failures/errors/skips;
+- Javadocs/check/shadowJar/distribution verification;
+- hot-path, GUI identity, reload, profile retry, exact snapshot, obsolete-job reconciliation, daily persistence, Vault recovery and public XP-input contracts enforced by tests/source checks;
+- installable JAR class major 69 with SQLite included and runtime APIs excluded;
+- version exactly `1.1.0` with no RC publisher in the tree;
+- merge to `main` through PR #7;
+- exact `main` CI success;
+- stable publisher run only when `release/stable` equals exact final `main`;
+- public `v1.1.0` remote tag and JAR/checksum/test/provenance assets independently verified after publication.
+
+The previous stable rollback is immutable `v1.0.0`. GitHub stable publication is source/CI certification; separate live PlexonCraft host validation is operational follow-up unless explicitly performed.
