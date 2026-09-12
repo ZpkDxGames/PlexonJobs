@@ -29,6 +29,7 @@ public final class ProfileManager {
     private final Set<UUID> loading = ConcurrentHashMap.newKeySet();
     private final Set<UUID> saving = ConcurrentHashMap.newKeySet();
     private final Map<UUID, CompletableFuture<Void>> saveFutures = new ConcurrentHashMap<>();
+    private volatile Set<String> acceptedJobIds;
 
     public ProfileManager(PlexonCoreAPI core, JobsDatabase database, Logger logger) {
         this.core = core;
@@ -37,6 +38,21 @@ public final class ProfileManager {
     }
 
     public PlayerJobsProfile get(UUID playerId) { return profiles.get(playerId); }
+
+    /**
+     * Accepts the job-id set of the live runtime and removes obsolete persisted definitions from
+     * already loaded profiles. Pruned profiles are dirtied so the next exact snapshot removes the
+     * stale rows from SQLite as well.
+     */
+    public void acceptKnownJobs(Collection<String> jobIds) {
+        Set<String> accepted = Set.copyOf(jobIds);
+        acceptedJobIds = accepted;
+        profiles.forEach((playerId, profile) -> {
+            if (profile.state() == PlayerJobsProfile.State.READY && profile.retainJobs(accepted)) {
+                dirty.add(playerId);
+            }
+        });
+    }
 
     public PlayerJobsProfile ensure(UUID playerId) {
         while (true) {
@@ -136,8 +152,10 @@ public final class ProfileManager {
                             logger.log(Level.SEVERE, "Failed to load PlexonJobs profile " + playerId + "; retrying after backoff", error);
                             return;
                         }
+                        Set<String> accepted = acceptedJobIds;
+                        boolean pruned = accepted != null && loaded.retainJobs(accepted);
                         loadRetryAfter.remove(playerId);
-                        profiles.replace(playerId, loadingProfile, loaded);
+                        if (profiles.replace(playerId, loadingProfile, loaded) && pruned) dirty.add(playerId);
                     }));
         } catch (RuntimeException failure) {
             loading.remove(playerId);
