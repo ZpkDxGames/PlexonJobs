@@ -1,5 +1,7 @@
 package com.plexon.jobs.storage;
 
+import com.plexon.jobs.model.JobProgress;
+import com.plexon.jobs.model.PlayerJobsProfile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -32,6 +34,31 @@ class JobsDatabaseTest {
         assertTrue(failure.getMessage().contains("newer than supported"));
     }
 
+    @Test void profileSaveReplacesRemovedRowsExactly() {
+        Path path = temp.resolve("profiles.db");
+        UUID id = UUID.randomUUID();
+        JobsDatabase database = new JobsDatabase(path);
+        database.initialize();
+
+        PlayerJobsProfile initial = new PlayerJobsProfile(id, PlayerJobsProfile.State.READY);
+        initial.put("miner", new JobProgress(250, 2, true));
+        initial.put("retired_job", new JobProgress(100, 1, true));
+        database.save(initial.snapshot(), "Player");
+
+        PlayerJobsProfile current = new PlayerJobsProfile(id, PlayerJobsProfile.State.READY);
+        current.put("miner", new JobProgress(500, 3, true));
+        database.save(current.snapshot(), "Player");
+
+        JobsDatabase reopened = new JobsDatabase(path);
+        reopened.initialize();
+        PlayerJobsProfile restored = reopened.load(id);
+        assertEquals(1, restored.jobs().size());
+        assertFalse(restored.jobs().containsKey("retired_job"), "Removed job rows must not resurrect after restart");
+        assertEquals(500, restored.jobs().get("miner").totalXp());
+        assertEquals(3, restored.jobs().get("miner").level());
+        assertTrue(restored.jobs().get("miner").joined());
+    }
+
     @Test void dailySnapshotsSurviveRestartAndOverwriteAbsolutely() {
         Path path = temp.resolve("daily.db");
         UUID id = UUID.randomUUID();
@@ -41,7 +68,6 @@ class JobsDatabaseTest {
         first.saveDaily(id, dayId, Map.of(
                 "miner", new JobsDatabase.DailyRow(125, 25),
                 "digger", new JobsDatabase.DailyRow(40, 9)));
-        // A retry/newer snapshot must replace the absolute values, not add them again.
         first.saveDaily(id, dayId, Map.of(
                 "miner", new JobsDatabase.DailyRow(150, 30),
                 "digger", new JobsDatabase.DailyRow(40, 9)));
