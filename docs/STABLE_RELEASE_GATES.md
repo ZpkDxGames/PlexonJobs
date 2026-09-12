@@ -1,45 +1,62 @@
-# PlexonJobs 1.1.0 stable release gates
+# PlexonJobs 2.0.0 stable release gates
 
-PlexonJobs 1.1.0 uses a GitHub source/CI certification gate for stable publication. Live PlexonCraft deployment validation is a separate operational follow-up and does not change the immutable GitHub stable tag.
+PlexonJobs 2.0.0 uses a GitHub source/CI certification gate for stable publication. Live PlexonCraft deployment validation remains a separate operational follow-up and never rewrites an immutable stable tag.
 
 ## GitHub stable-release gate
 
-Stable `v1.1.0` may be published only when all of these are true on the exact final merged `main` commit:
+Stable `v2.0.0` may be published only when all of these are true on the exact final merged `main` commit:
 
-- previous stable source `24b8e61950cb3a01112351e19c733d9a80953a03` (`v1.0.0`) is an ancestor;
-- the project version is exactly `1.1.0` with no prerelease suffix;
+- previous stable source `72f9225c2d337422d617ff2b5638363eeb98a3cf` (`v1.1.0`) is an ancestor;
+- project version is exactly `2.0.0` with no prerelease suffix;
 - Java 25 / Paper 26.2 / verified PlexonCore 2.0.4 build contract passes;
-- the JUnit suite is non-empty with zero failures, errors or skips;
+- JUnit suite is non-empty with zero failures, errors or skips;
 - Javadoc, `check`, `shadowJar` and distribution verification pass;
-- the installable JAR is Java class major 69, contains bundled SQLite, and does not shade PlexonCore, Paper/Bukkit, Adventure, Vault or PlaceholderAPI;
-- holder-based GUI identity/click-drag routing contracts pass;
-- profile-load retry/backoff is present and covered;
-- `player_jobs` persistence is an exact transactional snapshot and obsolete job definitions are reconciled only after runtime acceptance;
-- same-day cap hydration/persistence and stale-revision guards pass;
-- Vault provider discovery is refreshable during payout flushing;
-- negative public-API XP mutations are rejected and zero is a no-op;
-- profile/daily/SHADOW graceful-shutdown write ordering is covered;
-- malformed YAML reload remains fail-closed;
-- no RC publisher remains in the stable source tree;
-- `.release/RELEASE_NOTES_1.1.0.md` exists;
-- `v1.1.0` does not already exist;
-- `release/stable` points exactly to the final current `main` SHA.
+- installable JAR is Java class major 69, contains bundled SQLite, and does not shade PlexonCore, Paper/Bukkit, Adventure, Vault or PlaceholderAPI;
+- all 12 built-in jobs are enabled in the default catalog;
+- Miner/Woodcutter/Digger retain PlexonCore natural-origin block-break authority;
+- non-Core jobs route through the centralized `ActivityGrantService` and native adapters perform no SQL, Vault deposit, YAML parsing or task creation;
+- Hunter unknown/disallowed spawn origins fail closed;
+- Builder repeat-position suppression is bounded;
+- Brewer attribution is bounded and fails closed when unattributed;
+- Explorer uses periodic discovery sampling with no movement-event hot path;
+- reward BossBar feedback is coalesced to reusable per-player state with global cleanup rather than task-per-reward behavior;
+- profile-load retry/backoff, exact profile snapshots, accepted-runtime obsolete-job reconciliation, daily-cap persistence/revision guards, Vault recovery, SHADOW atomicity and shutdown write barriers remain covered;
+- holder-based GUI identity/click-drag routing remains intact;
+- malformed YAML/reload remains fail-closed;
+- no RC publisher exists in the source tree;
+- `.release/RELEASE_NOTES_2.0.0.md` exists;
+- `v2.0.0` does not already exist;
+- `release/stable` points exactly to final current `main`.
 
-The Release workflow must then rebuild/test that exact source, emit JAR/checksum/test/provenance evidence, create normal latest release `v1.1.0`, query the **remote GitHub tag** to prove it targets the exact source SHA, download the four public assets, and verify checksum/evidence before succeeding.
+The Release workflow must rebuild/test that exact source, emit JAR/checksum/test/provenance evidence, create normal latest release `v2.0.0`, query the remote GitHub tag to prove it targets the exact source SHA, re-download all four public assets, and verify checksums/evidence before succeeding.
 
-Stable provenance records `release_gate=GITHUB_SOURCE_CI_CERTIFIED`. It also records `runtime_certification=NOT_EXECUTED` unless separate live-host certification has actually been performed; this is an explicit scope statement, not a failed GitHub release gate.
+Stable provenance records `release_gate=GITHUB_SOURCE_CI_CERTIFIED` and `runtime_certification=NOT_EXECUTED` unless separate live-host certification has actually been performed.
 
 ## Previous stable rollback
 
-- tag: `v1.0.0`
-- source: `24b8e61950cb3a01112351e19c733d9a80953a03`
-- JAR: `PlexonJobs-1.0.0.jar`
-- SHA-256: `f6adfa64e60f195e9528be37c5e91e8938453a3c6635b5b2a5ba75a102cdeaa0`
+- tag: `v1.1.0`
+- source: `72f9225c2d337422d617ff2b5638363eeb98a3cf`
+- JAR: `PlexonJobs-1.1.0.jar`
+- SHA-256: `bbdc7027800029c7588005860befb0f2111cb73352f82aadebce48c3dd594e9f`
 
-Schema remains version 2. Operational rollback should still preserve a matching backup of `plugins/PlexonJobs/jobs.db` and YAML configuration.
+Schema remains version 2. Operational rollback should preserve matching backups of `jobs.db`, YAML configuration, and relevant player/world data because Explorer discoveries use player PDC.
 
-## Optional live deployment verification
+## Optional live PlexonCraft verification
 
-When deploying on the real PlexonCraft host, verify startup, `/jobs` GUI interaction/transfer safety, enabled natural-origin reward paths, disabled job families, daily-cap hydration and graceful restart, Vault outage/recovery, profile persistence, malformed reload recovery, PlaceholderAPI behavior, Spark contribution and a representative soak.
+When deployed to the real host, verify at minimum:
 
-These operational observations may inform a later maintenance release if a real defect is found, but they must not move or rewrite the already-published `v1.1.0` tag.
+- clean startup with Paper 26.2 / Java 25 / PlexonCore 2.0.4 / Vault-Theosis;
+- `/jobs` GUI interaction/transfer safety and all 12 default jobs visible/available;
+- representative successful activity for every job family;
+- Hunter spawner/custom/unknown mob non-reward behavior;
+- Builder same-position repeat suppression;
+- automated/unattributed brewing non-reward behavior;
+- Explorer one-time biome discovery behavior and restart persistence;
+- BossBar XP/money accumulation, progress, expiry, reward sound and level-up title/sound;
+- daily-cap hydration and graceful restart continuity;
+- Vault outage/recovery and payout retry behavior;
+- valid/malformed reload behavior;
+- profile/SHADOW persistence and PlaceholderAPI;
+- representative Spark comparison and multiplayer soak.
+
+A proven live defect should be fixed in a later maintenance release rather than moving or rewriting `v2.0.0`.
