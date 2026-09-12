@@ -1,6 +1,7 @@
 runtime:
+  # Stable 2.0 defaults to live rewards. Existing installations retain their current config.yml value on upgrade.
   # DISABLED = no activity processing, SHADOW = calculate only, PRIMARY = mutate XP and accrue economy payouts.
-  mode: SHADOW
+  mode: PRIMARY
   core-api-range: ">=2.0 <3.0"
 
 membership:
@@ -40,7 +41,7 @@ activity:
     # Automated brewing without a recent player interaction does not earn job rewards.
     attribution-seconds: 90
   explorer:
-    # Periodic biome discovery sampling; no PlayerMoveEvent hot path.
+    # Periodic biome discovery sampling; no movement-event hot path.
     sample-ticks: 40
 
 feedback:
