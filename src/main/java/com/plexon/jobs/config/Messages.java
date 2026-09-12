@@ -11,11 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * Immutable player-facing message snapshot. Existing installations may have an older messages.yml,
- * so newly introduced keys intentionally fall back to embedded defaults instead of making an upgrade
- * fail merely because saveResource(..., false) preserved the administrator's existing file.
- */
+/** Immutable player-facing message snapshot with embedded defaults for upgrades. */
 public final class Messages {
     private static final MiniMessage MINI = MiniMessage.miniMessage();
     private static final Map<String, String> DEFAULTS = defaults();
@@ -36,7 +32,6 @@ public final class Messages {
         } catch (Exception failure) {
             throw new IllegalArgumentException("Invalid YAML in messages.yml; current runtime remains unchanged", failure);
         }
-
         Map<String, String> resolved = new LinkedHashMap<>(DEFAULTS);
         flatten(yaml, "", resolved);
         return new Messages(resolved);
@@ -66,13 +61,9 @@ public final class Messages {
         for (String key : section.getKeys(false)) {
             String path = prefix.isEmpty() ? key : prefix + "." + key;
             Object raw = section.get(key);
-            if (raw instanceof ConfigurationSection child) {
-                flatten(child, path, out);
-            } else if (raw instanceof String value) {
-                out.put(path, value);
-            } else if (raw != null) {
-                throw new IllegalArgumentException("messages.yml value " + path + " must be a string");
-            }
+            if (raw instanceof ConfigurationSection child) flatten(child, path, out);
+            else if (raw instanceof String value) out.put(path, value);
+            else if (raw != null) throw new IllegalArgumentException("messages.yml value " + path + " must be a string");
         }
     }
 
@@ -86,7 +77,7 @@ public final class Messages {
         map.put("not-joined", "<red>You are not in that job.</red>");
         map.put("max-jobs", "<red>You have reached your active job limit.</red>");
         map.put("unknown-job", "<red>Unknown job.</red>");
-        map.put("job-disabled", "<red>That job is not currently available.</red>");
+        map.put("job-disabled", "<red>That job is disabled by server configuration.</red>");
         map.put("left-all", "<yellow>Left all active jobs.</yellow>");
         map.put("no-permission", "<red>You do not have permission to do that.</red>");
         map.put("player-only", "<red>This command must be run in game.</red>");
@@ -109,9 +100,12 @@ public final class Messages {
         map.put("menu.leave", "<yellow>Leave job</yellow>");
         map.put("menu.confirm-leave", "<red>Confirm leave</red>");
         map.put("menu.cancel", "<gray>Cancel</gray>");
-        map.put("menu.disabled-detail", "<gray>This job stays disabled until PlexonCore provides an authoritative activity context for it.</gray>");
+        map.put("menu.disabled-detail", "<gray>This job is disabled by server configuration.</gray>");
         map.put("menu.reset-warning", "<red>Leaving resets this job's stored XP and level.</red>");
         map.put("menu.active-summary", "<gray>Active jobs: <white><active></white>/<white><max></white></gray>");
+        map.put("feedback.bossbar", "<job> <dark_gray>•</dark_gray> <aqua>+<xp> XP</aqua> <green>+$<money></green> <dark_gray>•</dark_gray> <gray>Lv. <level></gray>");
+        map.put("feedback.level-up-title", "<gold><bold>LEVEL UP!</bold></gold>");
+        map.put("feedback.level-up-subtitle", "<job> <dark_gray>•</dark_gray> <yellow>Level <level></yellow>");
         return Map.copyOf(map);
     }
 }

@@ -3,7 +3,7 @@ version: '${version}'
 main: com.plexon.jobs.PlexonJobs
 api-version: '26.2'
 author: ZpkDxGames
-description: Core-native occupation, progression and economy system for PlexonCraft.
+description: Full occupation, progression, economy and player-feedback system for PlexonCraft.
 depend:
   - PlexonCore
 softdepend:
@@ -22,6 +22,9 @@ permissions:
   plexonjobs.admin:
     default: op
   plexonjobs.use:
+    default: true
+  plexonjobs.feedback:
+    description: Receive PlexonJobs BossBar, reward sound and level-up feedback.
     default: true
   plexonjobs.maxjobs.1:
     default: true

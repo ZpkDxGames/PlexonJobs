@@ -1,14 +1,17 @@
 package com.plexon.jobs.config;
 
 import com.plexon.jobs.model.ActivityReward;
+import com.plexon.jobs.model.ActivityType;
 import com.plexon.jobs.model.JobDefinition;
 import com.plexon.jobs.runtime.RuntimeMode;
 import com.plexon.jobs.util.Money;
+import net.kyori.adventure.key.Key;
 import org.bukkit.GameMode;
 import org.bukkit.Material;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
@@ -18,6 +21,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -36,15 +40,13 @@ public final class ConfigLoader {
         saveIfMissing("messages.yml");
         saveIfMissing("migration.yml");
 
-        // Bukkit's reloadConfig path can recover from malformed YAML with fallback/default state.
-        // Validate the candidate file first so a reload cannot silently replace the accepted runtime.
         File configFile = new File(plugin.getDataFolder(), "config.yml");
         validateYaml(configFile, "config.yml");
         plugin.reloadConfig();
 
         ConfigurationSection cfg = plugin.getConfig();
         int moneyScale = integer(cfg, "payout.money-scale", 2, 0, 6);
-        BigDecimal moneyCap = decimal(cfg, "limits.default-money-per-day", new BigDecimal("0"));
+        BigDecimal moneyCap = decimal(cfg, "limits.default-money-per-day", new BigDecimal("5000.00"));
         if (moneyCap.signum() < 0) throw invalid("limits.default-money-per-day", "must be >= 0");
         String payoutMode = string(cfg, "payout.mode", "COALESCED").trim().toUpperCase(Locale.ROOT);
         if (!payoutMode.equals("COALESCED")) {
@@ -56,8 +58,31 @@ public final class ConfigLoader {
             catch (IllegalArgumentException ex) { throw invalid("gameplay.allowed-game-modes", "unknown game mode " + mode); }
         }
 
+        Set<String> hunterReasons = normalizedStringSet(cfg, "activity.hunter.allowed-spawn-reasons",
+                List.of("NATURAL", "RAID", "PATROL", "TRAP", "REINFORCEMENTS", "NETHER_PORTAL", "VILLAGE_INVASION"));
+        for (String reason : hunterReasons) {
+            try { CreatureSpawnEvent.SpawnReason.valueOf(reason); }
+            catch (IllegalArgumentException ex) { throw invalid("activity.hunter.allowed-spawn-reasons", "unknown spawn reason " + reason); }
+        }
+
+        FeedbackConfig feedback = new FeedbackConfig(
+                bool(cfg, "feedback.enabled", true),
+                bool(cfg, "feedback.bossbar.enabled", true),
+                integer(cfg, "feedback.bossbar.duration-ticks", 60, 10, 1_200),
+                bool(cfg, "feedback.reward-sound.enabled", true),
+                soundKey(cfg, "feedback.reward-sound.key", "minecraft:entity.experience_orb.pickup"),
+                decimal(cfg, "feedback.reward-sound.volume", new BigDecimal("0.35")).floatValue(),
+                decimal(cfg, "feedback.reward-sound.pitch", new BigDecimal("1.35")).floatValue(),
+                bool(cfg, "feedback.level-up.title-enabled", true),
+                bool(cfg, "feedback.level-up.sound-enabled", true),
+                soundKey(cfg, "feedback.level-up.sound", "minecraft:entity.player.levelup"),
+                decimal(cfg, "feedback.level-up.volume", new BigDecimal("0.8")).floatValue(),
+                decimal(cfg, "feedback.level-up.pitch", new BigDecimal("1.1")).floatValue()
+        );
+        validateVolumePitch(feedback);
+
         JobsConfig jobsConfig = new JobsConfig(
-                RuntimeMode.parse(string(cfg, "runtime.mode", "SHADOW")),
+                RuntimeMode.parse(string(cfg, "runtime.mode", "PRIMARY")),
                 nonBlank(string(cfg, "runtime.core-api-range", ">=2.0 <3.0"), "runtime.core-api-range"),
                 integer(cfg, "membership.default-max-jobs", 3, 1, 64),
                 bool(cfg, "membership.keep-level-on-leave", true),
@@ -66,11 +91,19 @@ public final class ConfigLoader {
                 integer(cfg, "payout.retry-limit", 3, 0, 100),
                 moneyScale,
                 Money.toMinor(moneyCap, moneyScale),
-                longInteger(cfg, "limits.default-xp-per-day", 0L, 0L, Long.MAX_VALUE),
+                longInteger(cfg, "limits.default-xp-per-day", 250_000L, 0L, Long.MAX_VALUE),
                 integer(cfg, "profiles.save-interval-ticks", 200, 20, 72_000),
-                parseZone(string(cfg, "limits.reset-timezone", "UTC")),
+                parseZone(string(cfg, "limits.reset-timezone", "America/Sao_Paulo")),
                 gameModes,
-                normalizedStringSet(cfg, "gameplay.disabled-worlds", List.of())
+                normalizedStringSet(cfg, "gameplay.disabled-worlds", List.of()),
+                new ActivityConfig(
+                        hunterReasons,
+                        integer(cfg, "activity.builder.repeat-window-seconds", 600, 1, 86_400),
+                        integer(cfg, "activity.builder.max-tracked-positions", 4_096, 128, 65_536),
+                        integer(cfg, "activity.brewer.attribution-seconds", 90, 5, 600),
+                        integer(cfg, "activity.explorer.sample-ticks", 40, 10, 1_200)
+                ),
+                feedback
         );
 
         File jobsFile = new File(plugin.getDataFolder(), "jobs.yml");
@@ -93,26 +126,9 @@ public final class ConfigLoader {
             Material icon = requireMaterial(string(section, "icon", "PAPER"));
             boolean enabled = bool(section, "enabled", true);
             int maxLevel = integer(section, "max-level", 200, 1, 10_000);
-            Map<Material, ActivityReward> breakRewards = new EnumMap<>(Material.class);
-            Object rawBreak = section.get("break");
-            if (rawBreak != null) {
-                if (!(rawBreak instanceof ConfigurationSection breakSection)) {
-                    throw new IllegalArgumentException("Job " + id + " break must be a map");
-                }
-                for (String materialName : breakSection.getKeys(false)) {
-                    Material material = requireMaterial(materialName);
-                    Object rawReward = breakSection.get(materialName);
-                    if (!(rawReward instanceof ConfigurationSection reward)) {
-                        throw new IllegalArgumentException("Reward for " + id + "/" + materialName + " must be a map");
-                    }
-                    BigDecimal rawMoney = decimal(reward, "money", BigDecimal.ZERO);
-                    if (rawMoney.signum() < 0) throw new IllegalArgumentException("Money reward for " + id + "/" + materialName + " must be >= 0");
-                    long money = Money.toMinor(rawMoney, moneyScale);
-                    long xp = longInteger(reward, "xp", 0L, 0L, Long.MAX_VALUE);
-                    breakRewards.put(material, new ActivityReward(xp, money));
-                }
-            }
-            definitions.add(new JobDefinition(id, display, icon, enabled, maxLevel, breakRewards));
+            Map<Material, ActivityReward> breakRewards = parseBreakRewards(section, id, moneyScale);
+            Map<ActivityType, Map<String, ActivityReward>> activityRewards = parseActivityRewards(section, id, moneyScale);
+            definitions.add(new JobDefinition(id, display, icon, enabled, maxLevel, breakRewards, activityRewards));
         }
         if (definitions.isEmpty()) throw new IllegalStateException("jobs.yml must define at least one job");
 
@@ -120,6 +136,62 @@ public final class ConfigLoader {
         validateYaml(messagesFile, "messages.yml");
         Messages messages = Messages.load(messagesFile);
         return new Loaded(jobsConfig, List.copyOf(definitions), messages);
+    }
+
+    private static Map<Material, ActivityReward> parseBreakRewards(ConfigurationSection job, String id, int moneyScale) {
+        Map<Material, ActivityReward> rewards = new EnumMap<>(Material.class);
+        Object rawBreak = job.get("break");
+        if (rawBreak == null) return rewards;
+        if (!(rawBreak instanceof ConfigurationSection section)) {
+            throw new IllegalArgumentException("Job " + id + " break must be a map");
+        }
+        for (String materialName : section.getKeys(false)) {
+            Material material = requireMaterial(materialName);
+            rewards.put(material, parseReward(section, materialName, id + "/break/" + materialName, moneyScale));
+        }
+        return rewards;
+    }
+
+    private static Map<ActivityType, Map<String, ActivityReward>> parseActivityRewards(ConfigurationSection job, String id, int moneyScale) {
+        EnumMap<ActivityType, Map<String, ActivityReward>> activities = new EnumMap<>(ActivityType.class);
+        for (ActivityType type : ActivityType.values()) {
+            if (type == ActivityType.BREAK || type == ActivityType.DAMAGE) continue;
+            String path = type.name().toLowerCase(Locale.ROOT);
+            Object raw = job.get(path);
+            if (raw == null) continue;
+            if (!(raw instanceof ConfigurationSection section)) {
+                throw new IllegalArgumentException("Job " + id + " " + path + " must be a map");
+            }
+            Map<String, ActivityReward> keyed = new LinkedHashMap<>();
+            for (String rawKey : section.getKeys(false)) {
+                String key = normalizeActivityKey(rawKey, id, path);
+                keyed.put(key, parseReward(section, rawKey, id + "/" + path + "/" + rawKey, moneyScale));
+            }
+            if (!keyed.isEmpty()) activities.put(type, Map.copyOf(keyed));
+        }
+        return activities;
+    }
+
+    private static ActivityReward parseReward(ConfigurationSection parent, String key, String label, int moneyScale) {
+        Object rawReward = parent.get(key);
+        if (!(rawReward instanceof ConfigurationSection reward)) {
+            throw new IllegalArgumentException("Reward for " + label + " must be a map");
+        }
+        BigDecimal rawMoney = decimal(reward, "money", BigDecimal.ZERO);
+        if (rawMoney.signum() < 0) throw new IllegalArgumentException("Money reward for " + label + " must be >= 0");
+        long money = Money.toMinor(rawMoney, moneyScale);
+        long xp = longInteger(reward, "xp", 0L, 0L, Long.MAX_VALUE);
+        return new ActivityReward(xp, money);
+    }
+
+    private static String normalizeActivityKey(String raw, String jobId, String activity) {
+        if (raw == null || raw.isBlank()) throw new IllegalArgumentException("Blank reward key for " + jobId + "/" + activity);
+        String key = raw.trim().toUpperCase(Locale.ROOT);
+        if (key.equals("*")) return key;
+        if (!key.matches("[A-Z0-9_.:-]{1,128}")) {
+            throw new IllegalArgumentException("Invalid reward key for " + jobId + "/" + activity + ": " + raw);
+        }
+        return key;
     }
 
     static void validateYaml(File file, String label) {
@@ -203,6 +275,19 @@ public final class ConfigLoader {
     private static ZoneId parseZone(String raw) {
         try { return ZoneId.of(raw); }
         catch (Exception ex) { throw new IllegalArgumentException("Invalid reset timezone: " + raw, ex); }
+    }
+
+    private static String soundKey(ConfigurationSection cfg, String path, String fallback) {
+        String raw = nonBlank(string(cfg, path, fallback), path);
+        try { return Key.key(raw).asString(); }
+        catch (IllegalArgumentException ex) { throw invalid(path, "must be a valid namespaced Adventure key"); }
+    }
+
+    private static void validateVolumePitch(FeedbackConfig feedback) {
+        if (feedback.rewardVolume() < 0 || feedback.rewardVolume() > 4) throw invalid("feedback.reward-sound.volume", "must be between 0 and 4");
+        if (feedback.rewardPitch() <= 0 || feedback.rewardPitch() > 2) throw invalid("feedback.reward-sound.pitch", "must be > 0 and <= 2");
+        if (feedback.levelVolume() < 0 || feedback.levelVolume() > 4) throw invalid("feedback.level-up.volume", "must be between 0 and 4");
+        if (feedback.levelPitch() <= 0 || feedback.levelPitch() > 2) throw invalid("feedback.level-up.pitch", "must be > 0 and <= 2");
     }
 
     private static String nonBlank(String value, String path) {
