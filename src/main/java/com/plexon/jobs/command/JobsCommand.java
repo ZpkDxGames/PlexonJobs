@@ -2,7 +2,6 @@ package com.plexon.jobs.command;
 
 import com.plexon.jobs.PlexonJobs;
 import com.plexon.jobs.api.PlexonJobsAPI;
-import com.plexon.jobs.model.JobProgress;
 import com.plexon.jobs.model.PlayerJobsProfile;
 import com.plexon.jobs.util.Money;
 import net.kyori.adventure.text.Component;
@@ -101,6 +100,10 @@ public final class JobsCommand implements TabExecutor {
     }
 
     private void showEarnings(Player player) {
+        if (!plugin.dailyPersistence().ensure(player.getUniqueId())) {
+            player.sendMessage(plugin.messages().render("daily-state-loading"));
+            return;
+        }
         long total = 0;
         for (var job : plugin.runtime().registry().definitions()) {
             long amount = plugin.limits().view(player.getUniqueId(), job.id()).moneyMinor();
