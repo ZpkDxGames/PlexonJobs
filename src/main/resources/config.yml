@@ -8,7 +8,7 @@ membership:
   keep-level-on-leave: true
 
 payout:
-  # PlexonJobs intentionally coalesces Vault deposits outside the work-event path.
+  # PlexonJobs intentionally coalesces Vault deposits outside gameplay-event paths.
   mode: COALESCED
   flush-ticks: 40
   max-commits-per-tick: 100
@@ -27,3 +27,35 @@ profiles:
 gameplay:
   allowed-game-modes: [SURVIVAL]
   disabled-worlds: []
+
+activity:
+  hunter:
+    # Unknown, spawner, egg, breeding, command and plugin-custom origins fail closed by default.
+    allowed-spawn-reasons: [NATURAL, RAID, PATROL, TRAP, REINFORCEMENTS, NETHER_PORTAL, VILLAGE_INVASION]
+  builder:
+    # Prevent rapid place/break loops from repeatedly earning at the same coordinates.
+    repeat-window-seconds: 600
+    max-tracked-positions: 4096
+  brewer:
+    # Automated brewing without a recent player interaction does not earn job rewards.
+    attribution-seconds: 90
+  explorer:
+    # Periodic biome discovery sampling; no PlayerMoveEvent hot path.
+    sample-ticks: 40
+
+feedback:
+  enabled: true
+  bossbar:
+    enabled: true
+    duration-ticks: 60
+  reward-sound:
+    enabled: true
+    key: "minecraft:entity.experience_orb.pickup"
+    volume: 0.35
+    pitch: 1.35
+  level-up:
+    title-enabled: true
+    sound-enabled: true
+    sound: "minecraft:entity.player.levelup"
+    volume: 0.80
+    pitch: 1.10
