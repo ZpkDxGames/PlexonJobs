@@ -82,7 +82,7 @@ public final class ConfigLoader {
         validateVolumePitch(feedback);
 
         JobsConfig jobsConfig = new JobsConfig(
-                RuntimeMode.parse(string(cfg, "runtime.mode", "SHADOW")),
+                RuntimeMode.parse(string(cfg, "runtime.mode", "PRIMARY")),
                 nonBlank(string(cfg, "runtime.core-api-range", ">=2.0 <3.0"), "runtime.core-api-range"),
                 integer(cfg, "membership.default-max-jobs", 3, 1, 64),
                 bool(cfg, "membership.keep-level-on-leave", true),
