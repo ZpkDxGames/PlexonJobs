@@ -15,12 +15,10 @@ import java.util.Set;
 public final class ExplorerDiscoveryService {
     private static final int MAX_DISCOVERIES = 512;
     private final PlexonJobs plugin;
-    private final ActivityGrantService grants;
     private final NamespacedKey discoveriesKey;
 
-    public ExplorerDiscoveryService(PlexonJobs plugin, ActivityGrantService grants) {
+    public ExplorerDiscoveryService(PlexonJobs plugin) {
         this.plugin = plugin;
-        this.grants = grants;
         this.discoveriesKey = new NamespacedKey(plugin, "explorer_discoveries");
     }
 
@@ -33,13 +31,12 @@ public final class ExplorerDiscoveryService {
         String biome = player.getLocation().getBlock().getBiome().toString().toUpperCase(Locale.ROOT);
         String discovery = player.getWorld().getEnvironment().name() + ":" + biome;
         Set<String> known = read(player);
-        if (known.contains(discovery)) return;
-        if (!grants.hasJoinedRoute(player.getUniqueId(), ActivityType.EXPLORE, discovery)) return;
-        ActivityGrantService.Outcome outcome = grants.handle(player, ActivityType.EXPLORE, discovery, 1,
+        if (known.contains(discovery) || known.size() >= MAX_DISCOVERIES) return;
+        if (!plugin.grants().hasJoinedRoute(player.getUniqueId(), ActivityType.EXPLORE, discovery)) return;
+        ActivityGrantService.Outcome outcome = plugin.grants().handle(player, ActivityType.EXPLORE, discovery, 1,
                 "paper:explore:" + discovery);
         if (!outcome.matchedMembership()) return;
         known.add(discovery);
-        if (known.size() > MAX_DISCOVERIES) return;
         player.getPersistentDataContainer().set(discoveriesKey, PersistentDataType.STRING, String.join("\n", known));
     }
 
