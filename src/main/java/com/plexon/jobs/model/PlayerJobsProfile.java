@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 public final class PlayerJobsProfile {
@@ -29,6 +30,14 @@ public final class PlayerJobsProfile {
     public Map<String, JobProgress> jobs() { return Collections.unmodifiableMap(jobs); }
     public JobProgress progress(String jobId) { return jobs.computeIfAbsent(jobId, ignored -> new JobProgress(0, 1, false)); }
     public void put(String jobId, JobProgress progress) { jobs.put(jobId, progress); }
+
+    /** Removes persisted job ids that are no longer part of the accepted runtime definition set. */
+    public boolean retainJobs(Set<String> acceptedJobIds) {
+        Objects.requireNonNull(acceptedJobIds, "acceptedJobIds");
+        boolean changed = jobs.keySet().removeIf(id -> !acceptedJobIds.contains(id));
+        if (changed) revision++;
+        return changed;
+    }
 
     public long activeCount() { return jobs.values().stream().filter(JobProgress::joined).count(); }
     public Collection<String> activeJobIds() {
