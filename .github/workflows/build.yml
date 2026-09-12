@@ -12,10 +12,10 @@ permissions:
   contents: read
 
 env:
-  ACCEPTED_RC2_SHA: '4929145d2e594fef5714319b8f668076fc66498a'
-  ROLLBACK_TAG: 'v1.0.0-rc.2'
-  ROLLBACK_SHA: '4929145d2e594fef5714319b8f668076fc66498a'
-  ROLLBACK_JAR_SHA256: '082334093b8b9e98afe31593dd4585eb0138ffae730cd1e91e1449cf658f22f6'
+  STABLE_BASELINE_SHA: '24b8e61950cb3a01112351e19c733d9a80953a03'
+  ROLLBACK_TAG: 'v1.0.0'
+  ROLLBACK_SHA: '24b8e61950cb3a01112351e19c733d9a80953a03'
+  ROLLBACK_JAR_SHA256: 'f6adfa64e60f195e9528be37c5e91e8938453a3c6635b5b2a5ba75a102cdeaa0'
   CORE_VERSION: '2.0.4'
   CORE_SHA256: '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
 
@@ -52,21 +52,53 @@ jobs:
             -Dfile="$core_jar" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
             -Dversion="$CORE_VERSION" -Dpackaging=jar -DgeneratePom=true
 
-      - name: Resolve version and prove accepted lineage
+      - name: Resolve version and prove stable ancestry
         id: meta
         shell: bash
         run: |
           set -euo pipefail
           VERSION="$(gradle -q properties | awk '$1 == "version:" {print $2; exit}')"
           test -n "$VERSION"
-          [[ "$VERSION" != *-* ]] || { echo "Stable source version must not have a prerelease suffix: $VERSION" >&2; exit 1; }
-          test "$VERSION" = '1.0.0'
-          git merge-base --is-ancestor "$ACCEPTED_RC2_SHA" HEAD
+          git merge-base --is-ancestor "$STABLE_BASELINE_SHA" HEAD
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Full source verification
         run: gradle --no-daemon clean test check javadoc shadowJar verifyDistribution --stacktrace
+
+      - name: Enforce stable source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e .github/workflows/rc-release.yml
+          test ! -e src/main/java/com/plexon/jobs/gui/JobsGui.java
+          grep -q 'implements InventoryHolder' src/main/java/com/plexon/jobs/gui/JobsMenuHolder.java
+          grep -q 'InventoryDragEvent' src/main/java/com/plexon/jobs/gui/JobsMenuController.java
+          grep -q 'DailyLimitPersistence' src/main/java/com/plexon/jobs/runtime/BlockActivityRouter.java
+          grep -q 'daily_earnings' src/main/java/com/plexon/jobs/storage/JobsDatabase.java
+          grep -q 'DELETE FROM player_jobs WHERE player_uuid=?' src/main/java/com/plexon/jobs/storage/JobsDatabase.java
+          grep -q 'LOAD_RETRY_NANOS' src/main/java/com/plexon/jobs/runtime/ProfileManager.java
+          grep -q 'acceptKnownJobs' src/main/java/com/plexon/jobs/runtime/ProfileManager.java
+          grep -q 'acceptProfileDefinitions' src/main/java/com/plexon/jobs/PlexonJobs.java
+          grep -q 'refreshEconomyAvailability' src/main/java/com/plexon/jobs/economy/PayoutService.java
+          grep -q 'if (amount < 0) return Result.fail' src/main/java/com/plexon/jobs/runtime/JobsRuntime.java
+          grep -q 'if (amount == 0) return Result.ok' src/main/java/com/plexon/jobs/runtime/JobsRuntime.java
+          if grep -R -n --include='*.java' 'org\.bukkit\.ChatColor' src/main/java; then
+            echo 'Legacy ChatColor usage is forbidden in the 1.1 player/admin surface.' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.java' 'createInventory(null' src/main/java/com/plexon/jobs/gui; then
+            echo 'Null-holder custom inventories are forbidden.' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.java' '\.getTitle()' src/main/java/com/plexon/jobs/gui; then
+            echo 'Inventory title parsing/identity is forbidden.' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.java' '\.getDisplayName()' src/main/java/com/plexon/jobs/gui; then
+            echo 'Display-name action identity is forbidden.' >&2
+            exit 1
+          fi
 
       - name: Build exact test summary
         shell: bash
@@ -92,7 +124,7 @@ jobs:
           print(totals)
           PY
 
-      - name: Verify stable distribution
+      - name: Verify distribution
         shell: bash
         run: |
           set -euo pipefail
@@ -103,6 +135,10 @@ jobs:
             plugin.yml \
             com/plexon/jobs/PlexonJobs.class \
             com/plexon/jobs/api/PlexonJobsAPI.class \
+            com/plexon/jobs/gui/JobsMenuHolder.class \
+            com/plexon/jobs/gui/JobsMenuController.class \
+            com/plexon/jobs/runtime/DailyLimitPersistence.class \
+            com/plexon/jobs/runtime/DailyLimitService.class \
             com/plexon/jobs/event/PlexonJobPayoutCommittedEvent.class \
             org/sqlite/JDBC.class; do
             grep -qx "$required" build/jar-contents.txt
@@ -129,7 +165,7 @@ jobs:
           cat > build/PROVENANCE.txt <<EOF
           repository=$GITHUB_REPOSITORY
           source_sha=$GITHUB_SHA
-          accepted_rc2=$ACCEPTED_RC2_SHA
+          stable_baseline=$STABLE_BASELINE_SHA
           version=$VERSION
           java=25
           java_major=69
@@ -142,9 +178,20 @@ jobs:
           rollback_tag=$ROLLBACK_TAG
           rollback_sha=$ROLLBACK_SHA
           rollback_jar_sha256=$ROLLBACK_JAR_SHA256
+          profile_load_retry_backoff=PASS
+          profile_storage_exact_snapshot=PASS
+          obsolete_job_reconciliation=PASS
           profile_shutdown_write_barrier=PASS
+          daily_cap_graceful_restart_persistence=PASS
+          daily_snapshot_revision_guard=PASS
+          daily_cap_crash_exactness=NOT_CLAIMED
           shadow_atomic_batch_persistence=PASS
           shadow_shutdown_write_barrier=PASS
+          vault_provider_recovery=PASS
+          api_nonpositive_xp_guard=PASS
+          custom_inventory_holder=PASS
+          legacy_gui_identity_antipatterns=ABSENT
+          configurable_minimessage_surface=PASS
           malformed_yaml_reload_fail_closed=PASS
           cross_process_vault_exactly_once=NOT_CLAIMED
           jar_size=$size

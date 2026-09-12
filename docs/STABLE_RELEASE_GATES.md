@@ -1,73 +1,45 @@
-# PlexonJobs 1.0.0 release and deployment gates
+# PlexonJobs 1.1.0 stable release gates
 
-PlexonJobs separates reproducible GitHub source/release closure from live PlexonCraft deployment certification.
+PlexonJobs 1.1.0 uses a GitHub source/CI certification gate for stable publication. Live PlexonCraft deployment validation is a separate operational follow-up and does not change the immutable GitHub stable tag.
 
 ## GitHub stable-release gate
 
-Stable `v1.0.0` may be published only when all of these are true on the exact final `main` commit:
+Stable `v1.1.0` may be published only when all of these are true on the exact final merged `main` commit:
 
-- accepted RC2 source `4929145d2e594fef5714319b8f668076fc66498a` is an ancestor;
-- Java 25 / Paper 26.2 / PlexonCore 2.0.4 build contract passes;
-- the full JUnit suite is non-empty with zero failures, errors or skips;
-- Javadoc, `shadowJar` and distribution verification pass;
+- previous stable source `24b8e61950cb3a01112351e19c733d9a80953a03` (`v1.0.0`) is an ancestor;
+- the project version is exactly `1.1.0` with no prerelease suffix;
+- Java 25 / Paper 26.2 / verified PlexonCore 2.0.4 build contract passes;
+- the JUnit suite is non-empty with zero failures, errors or skips;
+- Javadoc, `check`, `shadowJar` and distribution verification pass;
 - the installable JAR is Java class major 69, contains bundled SQLite, and does not shade PlexonCore, Paper/Bukkit, Adventure, Vault or PlaceholderAPI;
-- profile shutdown write ordering, atomic SHADOW batch persistence, SHADOW shutdown write ordering and fail-closed YAML reload contracts are covered by source/tests;
-- stable release notes exist;
-- `v1.0.0` does not already exist;
-- `release/stable` points to the exact current `main` SHA;
-- the Release workflow rebuilds/tests that exact SHA, publishes JAR/checksum/test/provenance assets, downloads those public assets and verifies their checksum/provenance before succeeding.
+- holder-based GUI identity/click-drag routing contracts pass;
+- profile-load retry/backoff is present and covered;
+- `player_jobs` persistence is an exact transactional snapshot and obsolete job definitions are reconciled only after runtime acceptance;
+- same-day cap hydration/persistence and stale-revision guards pass;
+- Vault provider discovery is refreshable during payout flushing;
+- negative public-API XP mutations are rejected and zero is a no-op;
+- profile/daily/SHADOW graceful-shutdown write ordering is covered;
+- malformed YAML reload remains fail-closed;
+- no RC publisher remains in the stable source tree;
+- `.release/RELEASE_NOTES_1.1.0.md` exists;
+- `v1.1.0` does not already exist;
+- `release/stable` points exactly to the final current `main` SHA.
 
-The GitHub provenance file records `runtime_certification=NOT_EXECUTED`; this is an explicit statement that live-host validation is separate, not a failed source/release gate.
+The Release workflow must then rebuild/test that exact source, emit JAR/checksum/test/provenance evidence, create normal latest release `v1.1.0`, query the **remote GitHub tag** to prove it targets the exact source SHA, download the four public assets, and verify checksum/evidence before succeeding.
 
-## Live PlexonCraft deployment checklist
+Stable provenance records `release_gate=GITHUB_SOURCE_CI_CERTIFIED`. It also records `runtime_certification=NOT_EXECUTED` unless separate live-host certification has actually been performed; this is an explicit scope statement, not a failed GitHub release gate.
 
-The following gates apply when deploying/certifying the stable artifact on the real host.
+## Previous stable rollback
 
-### Installation and migration
+- tag: `v1.0.0`
+- source: `24b8e61950cb3a01112351e19c733d9a80953a03`
+- JAR: `PlexonJobs-1.0.0.jar`
+- SHA-256: `f6adfa64e60f195e9528be37c5e91e8938453a3c6635b5b2a5ba75a102cdeaa0`
 
-- Back up the actual prior PlexonJobs/Jobs Reborn state.
-- Start with the supported PlexonCore, Vault, TheosisEconomy and required optional integrations.
-- Inspect the actual Jobs Reborn source schema; dry-run/import only if supported by explicit mapping.
-- Verify unknown mappings, idempotency/completion behavior and rollback.
+Schema remains version 2. Operational rollback should still preserve a matching backup of `plugins/PlexonJobs/jobs.db` and YAML configuration.
 
-### Player flow
+## Optional live deployment verification
 
-- `/jobs`, browse/info, join, leave, leave-all, stats and earnings.
-- Multiple jobs, default limit, permission limit and permission reduction without deleting existing membership.
-- Reconnect, restart and stale-load behavior.
-- XP accrual, level transition, multiple-level crossing and max level.
+When deploying on the real PlexonCraft host, verify startup, `/jobs` GUI interaction/transfer safety, enabled natural-origin reward paths, disabled job families, daily-cap hydration and graceful restart, Vault outage/recovery, profile persistence, malformed reload recovery, PlaceholderAPI behavior, Spark contribution and a representative soak.
 
-### Work/provenance and anti-exploit
-
-- Natural Miner/Woodcutter/Digger work grants exactly configured XP/money in PRIMARY.
-- PLAYER_PLACED and UNKNOWN origins fail closed for natural-only mining.
-- Cancelled/protected work does not reward.
-- Creative/spectator and disabled-world policy.
-- Repeated place/break resource farming attempts.
-- No duplicate processing/reward loops across PlexonSkills, PlexonQuests, PlexonSpawners or PlexonTools.
-
-### Payout/economy
-
-- TheosisEconomy is the observed Vault provider.
-- Fractional/repeated payout totals match fixed-unit expectations.
-- Sustained work coalesces to bounded Vault deposits, never one deposit per work event.
-- Provider outage keeps money pending during the live process; recovery/retry does not duplicate payout.
-- Logout, graceful shutdown and restart behavior are observed.
-- Preserve the explicit limitation: Vault has no plugin-supplied idempotency key, so distributed cross-process exactly-once is not claimed.
-
-### Persistence and reload
-
-- Graceful shutdown/restart preserves the newest job XP/level state under concurrent dirty saves.
-- SHADOW aggregate totals remain exact across scheduled writes and shutdown.
-- Valid reload swaps definitions without duplicate subscription/task.
-- Invalid/malformed `config.yml` or `jobs.yml` retains the known-good runtime.
-- PlaceholderAPI values remain cache-only.
-- Core owner-aware module lifecycle is clean across disable/start.
-
-### Performance certification
-
-Capture representative Spark evidence for enabled work paths and mixed-player load. Record TPS, MSPT distribution where available, PlexonJobs/Core/Vault contributions, DB/persistence behavior and scheduler behavior.
-
-Prove in runtime evidence: no Vault deposit per work event, no DB query/write per work event, no task per work event, bounded payout accumulation and bounded persistence. Run a representative soak and inspect logs/diagnostics afterward.
-
-Live certification results may update deployment records, but must not rewrite the already-published stable tag or its provenance.
+These operational observations may inform a later maintenance release if a real defect is found, but they must not move or rewrite the already-published `v1.1.0` tag.

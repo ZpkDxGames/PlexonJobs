@@ -3,7 +3,8 @@ package com.plexon.jobs.command;
 import com.plexon.jobs.PlexonJobs;
 import com.plexon.jobs.migration.LegacyJobsMigration;
 import com.plexon.jobs.util.Money;
-import org.bukkit.ChatColor;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Material;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -20,28 +21,33 @@ public final class JobsAdminCommand implements TabExecutor {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!sender.hasPermission("plexonjobs.admin")) { sender.sendMessage(ChatColor.RED + "No permission."); return true; }
+        if (!sender.hasPermission("plexonjobs.admin")) {
+            sender.sendMessage(plugin.messages().render("no-permission"));
+            return true;
+        }
         if (args.length == 0) return usage(sender);
         switch (args[0].toLowerCase(Locale.ROOT)) {
             case "diagnostics" -> diagnostics(sender);
             case "reload" -> {
                 try {
                     plugin.reloadJobs();
-                    sender.sendMessage(ChatColor.GREEN + "PlexonJobs runtime configuration reloaded transactionally.");
+                    sender.sendMessage(Component.text("PlexonJobs runtime configuration reloaded transactionally.", NamedTextColor.GREEN));
                 } catch (RuntimeException ex) {
-                    sender.sendMessage(ChatColor.RED + "Reload rejected; previous runtime remains active: " + ex.getMessage());
+                    sender.sendMessage(Component.text("Reload rejected; previous runtime remains active: " + ex.getMessage(), NamedTextColor.RED));
                 }
             }
             case "payout" -> {
                 if (args.length >= 2 && args[1].equalsIgnoreCase("retry")) {
                     plugin.payouts().retryAll();
                     int committed = plugin.payouts().flush(plugin.runtime().config().maxCommitsPerTick());
-                    sender.sendMessage(ChatColor.YELLOW + "Retry gate reset; committed " + committed + " payout batch(es) now.");
-                } else sender.sendMessage(ChatColor.YELLOW + "/jobsadmin payout retry");
+                    sender.sendMessage(Component.text("Retry gate reset; committed " + committed + " payout batch(es) now.", NamedTextColor.YELLOW));
+                } else sender.sendMessage(Component.text("/jobsadmin payout retry", NamedTextColor.YELLOW));
             }
             case "migration" -> migration(sender, args);
             case "simulate" -> simulate(sender, args);
-            case "backup" -> sender.sendMessage(ChatColor.YELLOW + "Stop/flush PlexonJobs and copy plugins/PlexonJobs/jobs.db plus YAML configuration. See docs/PHASE2_ARCHITECTURE.md.");
+            case "backup" -> sender.sendMessage(Component.text(
+                    "Stop/flush PlexonJobs and copy plugins/PlexonJobs/jobs.db plus YAML configuration. See docs/FULL_REVAMP_1.1.0.md.",
+                    NamedTextColor.YELLOW));
             default -> usage(sender);
         }
         return true;
@@ -50,19 +56,23 @@ public final class JobsAdminCommand implements TabExecutor {
     private void diagnostics(CommandSender sender) {
         var runtime = plugin.runtime();
         var metrics = plugin.metrics().snapshot();
-        sender.sendMessage(ChatColor.GOLD + "PlexonJobs diagnostics");
-        sender.sendMessage(ChatColor.GRAY + "Mode: " + runtime.config().mode() + " | Core: " + plugin.core().version().pluginVersion() + " API " + plugin.core().version().apiVersion());
-        sender.sendMessage(ChatColor.GRAY + "Jobs: " + runtime.registry().definitions().size() + " | Core break materials: " + runtime.registry().breakMaterials().size());
-        sender.sendMessage(ChatColor.GRAY + "Profiles: cached=" + runtime.profiles().onlineCached() + ", loading=" + runtime.profiles().loadingCount() + ", dirty=" + runtime.profiles().dirtyCount() + ", saving=" + runtime.profiles().savingCount());
-        sender.sendMessage(ChatColor.GRAY + "Economy: available=" + plugin.payouts().economyAvailable() + ", pendingPlayers=" + plugin.payouts().pendingPlayers() +
+        sender.sendMessage(Component.text("PlexonJobs diagnostics", NamedTextColor.GOLD));
+        sender.sendMessage(gray("Mode: " + runtime.config().mode() + " | Core: " + plugin.core().version().pluginVersion() + " API " + plugin.core().version().apiVersion()));
+        sender.sendMessage(gray("Jobs: " + runtime.registry().definitions().size() + " | Core break materials: " + runtime.registry().breakMaterials().size()));
+        sender.sendMessage(gray("Profiles: cached=" + runtime.profiles().onlineCached() + ", loading=" + runtime.profiles().loadingCount() +
+                ", dirty=" + runtime.profiles().dirtyCount() + ", saving=" + runtime.profiles().savingCount()));
+        sender.sendMessage(gray("Daily state: loaded=" + plugin.dailyPersistence().loadedCount() + ", loading=" +
+                plugin.dailyPersistence().loadingCount() + ", saving=" + plugin.dailyPersistence().savingCount() +
+                ", dirty=" + plugin.limits().dirtyPlayers().size()));
+        sender.sendMessage(gray("Economy: available=" + plugin.payouts().economyAvailable() + ", pendingPlayers=" + plugin.payouts().pendingPlayers() +
                 ", pending=" + Money.format(plugin.payouts().totalPending(), runtime.config().moneyScale()) + ", oldestMs=" + plugin.payouts().oldestPendingAgeMillis() +
-                ", retryBlocked=" + plugin.payouts().blockedPlayers());
-        sender.sendMessage(ChatColor.GRAY + "Payouts: flushes=" + metrics.payoutFlushes() + ", commits=" + metrics.payoutCommits() + ", failed=" + metrics.failedDeposits());
-        sender.sendMessage(ChatColor.GRAY + "Activities: callbacks=" + metrics.callbacks() + ", fastRejects=" + metrics.fastRejects() + ", originRejects=" + metrics.originRejects() +
-                ", eligible=" + metrics.eligible() + ", capped=" + metrics.capped());
-        sender.sendMessage(ChatColor.GRAY + "Shadow: moneyMinor=" + metrics.shadowMoneyMinor() + ", xp=" + metrics.shadowXp() + " | shadowBuffer=" + plugin.shadow().size());
-        sender.sendMessage(ChatColor.GRAY + "Persistence: schema=" + plugin.database().schemaVersion() + " | Core IO queue=" + plugin.core().scheduler().ioQueueSize() + " | day=" + plugin.limits().day());
-        sender.sendMessage(ChatColor.GRAY + "Core gateway routes=" + plugin.core().events().compiledBlockRoutes() + " | metrics=" + plugin.core().events().metrics());
+                ", retryBlocked=" + plugin.payouts().blockedPlayers()));
+        sender.sendMessage(gray("Payouts: flushes=" + metrics.payoutFlushes() + ", commits=" + metrics.payoutCommits() + ", failed=" + metrics.failedDeposits()));
+        sender.sendMessage(gray("Activities: callbacks=" + metrics.callbacks() + ", fastRejects=" + metrics.fastRejects() + ", originRejects=" + metrics.originRejects() +
+                ", eligible=" + metrics.eligible() + ", capped=" + metrics.capped()));
+        sender.sendMessage(gray("Shadow: moneyMinor=" + metrics.shadowMoneyMinor() + ", xp=" + metrics.shadowXp() + " | shadowBuffer=" + plugin.shadow().size()));
+        sender.sendMessage(gray("Persistence: schema=" + plugin.database().schemaVersion() + " | Core IO queue=" + plugin.core().scheduler().ioQueueSize() + " | day=" + plugin.limits().day()));
+        sender.sendMessage(gray("Core gateway routes=" + plugin.core().events().compiledBlockRoutes() + " | metrics=" + plugin.core().events().metrics()));
     }
 
     private void migration(CommandSender sender, String[] args) {
@@ -71,45 +81,63 @@ public final class JobsAdminCommand implements TabExecutor {
         switch (action) {
             case "scan" -> {
                 var scan = migration.scan();
-                sender.sendMessage(ChatColor.YELLOW + "Source: " + scan.sourcePath() + " | exists=" + scan.exists() + " | candidates=" + scan.candidates().size());
-                scan.candidates().forEach(path -> sender.sendMessage(ChatColor.GRAY + "- " + path));
+                sender.sendMessage(Component.text("Source: " + scan.sourcePath() + " | exists=" + scan.exists() + " | candidates=" + scan.candidates().size(), NamedTextColor.YELLOW));
+                scan.candidates().forEach(path -> sender.sendMessage(gray("- " + path)));
             }
-            case "plan", "status" -> sender.sendMessage(ChatColor.YELLOW + migration.plan());
-            case "execute" -> sender.sendMessage(ChatColor.RED + "Migration execute is fail-closed in this candidate until the administrator's actual Jobs schema is inspected and a staging backup dry-run passes.");
-            default -> sender.sendMessage(ChatColor.YELLOW + "/jobsadmin migration <scan|plan|status|execute>");
+            case "plan", "status" -> sender.sendMessage(Component.text(migration.plan(), NamedTextColor.YELLOW));
+            case "execute" -> sender.sendMessage(Component.text(
+                    "Migration execute remains fail-closed until the administrator's actual Jobs schema is inspected and a staging backup dry-run passes.",
+                    NamedTextColor.RED));
+            default -> sender.sendMessage(Component.text("/jobsadmin migration <scan|plan|status|execute>", NamedTextColor.YELLOW));
         }
     }
 
     private void simulate(CommandSender sender, String[] args) {
-        if (args.length < 4) { sender.sendMessage(ChatColor.YELLOW + "/jobsadmin simulate <job> <material> <count>"); return; }
+        if (args.length < 4) {
+            sender.sendMessage(Component.text("/jobsadmin simulate <job> <material> <count>", NamedTextColor.YELLOW));
+            return;
+        }
         var job = plugin.runtime().registry().find(args[1]).orElse(null);
         Material material = Material.matchMaterial(args[2]);
-        if (job == null || material == null) { sender.sendMessage(ChatColor.RED + "Unknown job or material."); return; }
+        if (job == null || material == null) {
+            sender.sendMessage(Component.text("Unknown job or material.", NamedTextColor.RED));
+            return;
+        }
         long count;
-        try { count = Long.parseLong(args[3]); } catch (NumberFormatException ex) { sender.sendMessage(ChatColor.RED + "Count must be an integer."); return; }
+        try { count = Long.parseLong(args[3]); }
+        catch (NumberFormatException ex) {
+            sender.sendMessage(Component.text("Count must be an integer.", NamedTextColor.RED));
+            return;
+        }
         if (count < 0 || count > MAX_SIMULATION_ACTIONS) {
-            sender.sendMessage(ChatColor.RED + "Count must be between 0 and " + MAX_SIMULATION_ACTIONS + ".");
+            sender.sendMessage(Component.text("Count must be between 0 and " + MAX_SIMULATION_ACTIONS + ".", NamedTextColor.RED));
             return;
         }
         var reward = job.breakReward(material);
         try {
             long money = Math.multiplyExact(reward.moneyMinorUnits(), count);
             long xp = Math.multiplyExact(reward.jobXpUnits(), count);
-            sender.sendMessage(ChatColor.GOLD + job.id() + " / " + material + " x" + count + ": " +
-                    ChatColor.GREEN + Money.format(money, plugin.runtime().config().moneyScale()) + ChatColor.GRAY + " money, " + xp + " job XP before daily caps. No state was granted.");
+            sender.sendMessage(Component.text(job.id() + " / " + material + " x" + count + ": ", NamedTextColor.GOLD)
+                    .append(Component.text(Money.format(money, plugin.runtime().config().moneyScale()), NamedTextColor.GREEN))
+                    .append(Component.text(" money, " + xp + " job XP before daily caps. No state was granted.", NamedTextColor.GRAY)));
         } catch (ArithmeticException overflow) {
-            sender.sendMessage(ChatColor.RED + "Simulation total overflowed the supported numeric range.");
+            sender.sendMessage(Component.text("Simulation total overflowed the supported numeric range.", NamedTextColor.RED));
         }
     }
 
+    private static Component gray(String text) {
+        return Component.text(text, NamedTextColor.GRAY);
+    }
+
     private static boolean usage(CommandSender sender) {
-        sender.sendMessage(ChatColor.YELLOW + "/jobsadmin <diagnostics|reload|payout retry|migration|simulate|backup>");
+        sender.sendMessage(Component.text("/jobsadmin <diagnostics|reload|payout retry|migration|simulate|backup>", NamedTextColor.YELLOW));
         return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) return List.of("diagnostics", "reload", "payout", "migration", "simulate", "backup").stream().filter(v -> v.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
+        if (args.length == 1) return List.of("diagnostics", "reload", "payout", "migration", "simulate", "backup").stream()
+                .filter(v -> v.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
         if (args.length == 2 && args[0].equalsIgnoreCase("migration")) return List.of("scan", "plan", "status", "execute");
         if (args.length == 2 && args[0].equalsIgnoreCase("payout")) return List.of("retry");
         if (args.length == 2 && args[0].equalsIgnoreCase("simulate")) return plugin.runtime().registry().definitions().stream().map(d -> d.id()).toList();

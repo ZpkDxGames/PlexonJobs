@@ -115,7 +115,11 @@ public final class ConfigLoader {
             definitions.add(new JobDefinition(id, display, icon, enabled, maxLevel, breakRewards));
         }
         if (definitions.isEmpty()) throw new IllegalStateException("jobs.yml must define at least one job");
-        return new Loaded(jobsConfig, List.copyOf(definitions));
+
+        File messagesFile = new File(plugin.getDataFolder(), "messages.yml");
+        validateYaml(messagesFile, "messages.yml");
+        Messages messages = Messages.load(messagesFile);
+        return new Loaded(jobsConfig, List.copyOf(definitions), messages);
     }
 
     static void validateYaml(File file, String label) {
@@ -210,5 +214,5 @@ public final class ConfigLoader {
         return new IllegalArgumentException("Invalid configuration at " + path + ": " + detail);
     }
 
-    public record Loaded(JobsConfig config, List<JobDefinition> definitions) {}
+    public record Loaded(JobsConfig config, List<JobDefinition> definitions, Messages messages) {}
 }

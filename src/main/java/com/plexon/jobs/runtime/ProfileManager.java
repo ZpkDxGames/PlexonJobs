@@ -17,15 +17,19 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class ProfileManager {
+    private static final long LOAD_RETRY_NANOS = 5_000_000_000L;
+
     private final PlexonCoreAPI core;
     private final JobsDatabase database;
     private final Logger logger;
     private final Map<UUID, PlayerJobsProfile> profiles = new ConcurrentHashMap<>();
     private final Map<UUID, Long> generations = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> loadRetryAfter = new ConcurrentHashMap<>();
     private final Set<UUID> dirty = ConcurrentHashMap.newKeySet();
     private final Set<UUID> loading = ConcurrentHashMap.newKeySet();
     private final Set<UUID> saving = ConcurrentHashMap.newKeySet();
     private final Map<UUID, CompletableFuture<Void>> saveFutures = new ConcurrentHashMap<>();
+    private volatile Set<String> acceptedJobIds;
 
     public ProfileManager(PlexonCoreAPI core, JobsDatabase database, Logger logger) {
         this.core = core;
@@ -35,15 +39,41 @@ public final class ProfileManager {
 
     public PlayerJobsProfile get(UUID playerId) { return profiles.get(playerId); }
 
+    /**
+     * Accepts the job-id set of the live runtime and removes obsolete persisted definitions from
+     * already loaded profiles. Pruned profiles are dirtied so the next exact snapshot removes the
+     * stale rows from SQLite as well.
+     */
+    public void acceptKnownJobs(Collection<String> jobIds) {
+        Set<String> accepted = Set.copyOf(jobIds);
+        acceptedJobIds = accepted;
+        profiles.forEach((playerId, profile) -> {
+            if (profile.state() == PlayerJobsProfile.State.READY && profile.retainJobs(accepted)) {
+                dirty.add(playerId);
+            }
+        });
+    }
+
     public PlayerJobsProfile ensure(UUID playerId) {
-        PlayerJobsProfile existing = profiles.get(playerId);
-        if (existing != null) return existing;
-        PlayerJobsProfile loadingProfile = new PlayerJobsProfile(playerId, PlayerJobsProfile.State.LOADING);
-        PlayerJobsProfile previous = profiles.putIfAbsent(playerId, loadingProfile);
-        if (previous != null) return previous;
-        long generation = generations.merge(playerId, 1L, Long::sum);
-        requestLoad(playerId, loadingProfile, generation);
-        return loadingProfile;
+        while (true) {
+            PlayerJobsProfile existing = profiles.get(playerId);
+            if (existing == null) {
+                PlayerJobsProfile loadingProfile = new PlayerJobsProfile(playerId, PlayerJobsProfile.State.LOADING);
+                PlayerJobsProfile previous = profiles.putIfAbsent(playerId, loadingProfile);
+                if (previous != null) continue;
+                long generation = generations.merge(playerId, 1L, Long::sum);
+                requestLoad(playerId, loadingProfile, generation);
+                return loadingProfile;
+            }
+            if (existing.state() != PlayerJobsProfile.State.FAILED) return existing;
+            if (loadRetryAfter.getOrDefault(playerId, 0L) > System.nanoTime()) return existing;
+
+            PlayerJobsProfile retryProfile = new PlayerJobsProfile(playerId, PlayerJobsProfile.State.LOADING);
+            if (!profiles.replace(playerId, existing, retryProfile)) continue;
+            long generation = generations.merge(playerId, 1L, Long::sum);
+            requestLoad(playerId, retryProfile, generation);
+            return retryProfile;
+        }
     }
 
     public void markDirty(UUID playerId) {
@@ -63,7 +93,10 @@ public final class ProfileManager {
             if (!onlineSet.contains(playerId)) {
                 saveAsync(playerId);
                 if (!dirty.contains(playerId) && !loading.contains(playerId) && !saving.contains(playerId)) {
-                    if (profiles.remove(playerId) != null) generations.merge(playerId, 1L, Long::sum);
+                    if (profiles.remove(playerId) != null) {
+                        generations.merge(playerId, 1L, Long::sum);
+                        loadRetryAfter.remove(playerId);
+                    }
                 }
             }
         }
@@ -108,17 +141,30 @@ public final class ProfileManager {
 
     private void requestLoad(UUID playerId, PlayerJobsProfile loadingProfile, long generation) {
         if (!loading.add(playerId)) return;
-        core.scheduler().supplyIo(() -> database.load(playerId)).whenComplete((loaded, error) ->
-                core.scheduler().runPrimary(() -> {
-                    loading.remove(playerId);
-                    if (generations.getOrDefault(playerId, 0L) != generation || profiles.get(playerId) != loadingProfile) return;
-                    if (error != null) {
-                        loadingProfile.state(PlayerJobsProfile.State.FAILED);
-                        logger.log(Level.SEVERE, "Failed to load PlexonJobs profile " + playerId, error);
-                        return;
-                    }
-                    profiles.replace(playerId, loadingProfile, loaded);
-                }));
+        try {
+            core.scheduler().supplyIo(() -> database.load(playerId)).whenComplete((loaded, error) ->
+                    core.scheduler().runPrimary(() -> {
+                        loading.remove(playerId);
+                        if (generations.getOrDefault(playerId, 0L) != generation || profiles.get(playerId) != loadingProfile) return;
+                        if (error != null) {
+                            loadingProfile.state(PlayerJobsProfile.State.FAILED);
+                            loadRetryAfter.put(playerId, System.nanoTime() + LOAD_RETRY_NANOS);
+                            logger.log(Level.SEVERE, "Failed to load PlexonJobs profile " + playerId + "; retrying after backoff", error);
+                            return;
+                        }
+                        Set<String> accepted = acceptedJobIds;
+                        boolean pruned = accepted != null && loaded.retainJobs(accepted);
+                        loadRetryAfter.remove(playerId);
+                        if (profiles.replace(playerId, loadingProfile, loaded) && pruned) dirty.add(playerId);
+                    }));
+        } catch (RuntimeException failure) {
+            loading.remove(playerId);
+            if (generations.getOrDefault(playerId, 0L) == generation && profiles.get(playerId) == loadingProfile) {
+                loadingProfile.state(PlayerJobsProfile.State.FAILED);
+                loadRetryAfter.put(playerId, System.nanoTime() + LOAD_RETRY_NANOS);
+            }
+            logger.log(Level.SEVERE, "Failed to schedule PlexonJobs profile load " + playerId + "; retrying after backoff", failure);
+        }
     }
 
     private void saveAsync(UUID playerId) {

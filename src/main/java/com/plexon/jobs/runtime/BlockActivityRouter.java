@@ -19,17 +19,19 @@ public final class BlockActivityRouter {
     private final JobRegistry registry;
     private final ProfileManager profiles;
     private final DailyLimitService limits;
+    private final DailyLimitPersistence dailyPersistence;
     private final PayoutService payouts;
     private final ShadowLedger shadow;
     private final JobsMetrics metrics;
 
     public BlockActivityRouter(JobsConfig config, JobRegistry registry, ProfileManager profiles,
-                               DailyLimitService limits, PayoutService payouts, ShadowLedger shadow,
-                               JobsMetrics metrics) {
+                               DailyLimitService limits, DailyLimitPersistence dailyPersistence,
+                               PayoutService payouts, ShadowLedger shadow, JobsMetrics metrics) {
         this.config = config;
         this.registry = registry;
         this.profiles = profiles;
         this.limits = limits;
+        this.dailyPersistence = dailyPersistence;
         this.payouts = payouts;
         this.shadow = shadow;
         this.metrics = metrics;
@@ -52,6 +54,11 @@ public final class BlockActivityRouter {
         PlayerJobsProfile profile = profiles.ensure(context.playerId());
         if (profile.state() != PlayerJobsProfile.State.READY || profile.activeCount() == 0) {
             metrics.fastReject(); return;
+        }
+        // SHADOW never grants/caps value. PRIMARY must hydrate the persisted cap before any grant.
+        if (config.mode() == RuntimeMode.PRIMARY && !dailyPersistence.ensure(context.playerId())) {
+            metrics.fastReject();
+            return;
         }
 
         for (JobDefinition job : routes) {

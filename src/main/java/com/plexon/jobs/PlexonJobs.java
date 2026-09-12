@@ -5,18 +5,22 @@ import com.plexon.jobs.command.JobsAdminCommand;
 import com.plexon.jobs.command.JobsCommand;
 import com.plexon.jobs.config.ConfigLoader;
 import com.plexon.jobs.config.JobsConfig;
+import com.plexon.jobs.config.Messages;
 import com.plexon.jobs.economy.JobsEconomy;
 import com.plexon.jobs.economy.PayoutService;
 import com.plexon.jobs.economy.PendingPayoutLedger;
 import com.plexon.jobs.economy.UnavailableJobsEconomy;
 import com.plexon.jobs.economy.VaultJobsEconomy;
+import com.plexon.jobs.gui.JobsMenuController;
 import com.plexon.jobs.integration.PlexonJobsExpansion;
 import com.plexon.jobs.migration.LegacyJobsMigration;
 import com.plexon.jobs.runtime.BlockActivityRouter;
+import com.plexon.jobs.runtime.DailyLimitPersistence;
 import com.plexon.jobs.runtime.DailyLimitService;
 import com.plexon.jobs.runtime.JobRegistry;
 import com.plexon.jobs.runtime.JobsMetrics;
 import com.plexon.jobs.runtime.JobsRuntime;
+import com.plexon.jobs.runtime.PlayerStateListener;
 import com.plexon.jobs.runtime.ProfileManager;
 import com.plexon.jobs.runtime.RuntimeMode;
 import com.plexon.jobs.runtime.ShadowLedger;
@@ -46,6 +50,7 @@ public final class PlexonJobs extends JavaPlugin {
     private JobsDatabase database;
     private ProfileManager profiles;
     private DailyLimitService limits;
+    private DailyLimitPersistence dailyPersistence;
     private final PendingPayoutLedger pendingLedger = new PendingPayoutLedger();
     private final ShadowLedger shadow = new ShadowLedger();
     private final JobsMetrics metrics = new JobsMetrics();
@@ -54,10 +59,12 @@ public final class PlexonJobs extends JavaPlugin {
     private volatile PayoutService payouts;
     private volatile JobsRuntime runtime;
     private volatile BlockActivityRouter blockRouter;
+    private volatile Messages messages;
     private AutoCloseable blockSubscription;
     private final List<BukkitTask> tasks = new ArrayList<>();
     private PlexonJobsExpansion expansion;
     private LegacyJobsMigration migration;
+    private JobsMenuController menus;
 
     @Override
     public void onEnable() {
@@ -85,6 +92,13 @@ public final class PlexonJobs extends JavaPlugin {
             AutoCloseable subscription = subscribeBlockBreaks(prepared.registry(), prepared.router());
             installPrepared(prepared);
             blockSubscription = subscription;
+            acceptProfileDefinitions(prepared);
+
+            // The API contract must exist on an ordinary initial enable, not only after reload.
+            registerApiService();
+            menus = new JobsMenuController(this);
+            Bukkit.getPluginManager().registerEvents(menus, this);
+            Bukkit.getPluginManager().registerEvents(new PlayerStateListener(profiles, dailyPersistence), this);
             registerCommands();
             registerModule();
             registerPlaceholderApi();
@@ -104,13 +118,14 @@ public final class PlexonJobs extends JavaPlugin {
         closeBlockSubscription();
         unregisterExpansion();
         if (payouts != null) {
-            while (payouts.totalPending() > 0 && payouts.economyAvailable()) {
+            while (payouts.totalPending() > 0) {
                 int committed = payouts.flush(runtime == null ? 100 : runtime.config().maxCommitsPerTick());
                 if (committed == 0) break;
             }
         }
         awaitShadowWrites();
         flushShadowBlocking();
+        if (dailyPersistence != null) dailyPersistence.saveAllBlocking();
         if (profiles != null) profiles.saveAllBlocking();
         Bukkit.getServicesManager().unregisterAll(this);
         if (core != null) {
@@ -139,6 +154,7 @@ public final class PlexonJobs extends JavaPlugin {
         JobsRuntime previousRuntime = runtime;
         PayoutService previousPayouts = payouts;
         BlockActivityRouter previousRouter = blockRouter;
+        Messages previousMessages = messages;
 
         try {
             cancelTasks();
@@ -151,6 +167,7 @@ public final class PlexonJobs extends JavaPlugin {
             registerPlaceholderApi();
             scheduleRuntimeTasks();
             updateModuleState();
+            acceptProfileDefinitions(next);
         } catch (RuntimeException failure) {
             cancelTasks();
             unregisterExpansion();
@@ -159,6 +176,7 @@ public final class PlexonJobs extends JavaPlugin {
             runtime = previousRuntime;
             payouts = previousPayouts;
             blockRouter = previousRouter;
+            messages = previousMessages;
             blockSubscription = subscribeBlockBreaks(previousRuntime.registry(), previousRouter);
             registerApiService();
             registerPlaceholderApi();
@@ -174,17 +192,26 @@ public final class PlexonJobs extends JavaPlugin {
         if (!ModuleRegistry.ModuleVersionRange.parse(config.coreApiRange()).contains(core.version())) {
             throw new IllegalStateException("Configured Core range " + config.coreApiRange() + " rejects API " + core.version().apiVersion());
         }
-        if (limits == null) limits = new DailyLimitService(config.resetZone(), config.defaultMoneyCapMinor(), config.defaultXpCap());
+        if (limits == null) {
+            limits = new DailyLimitService(config.resetZone(), config.defaultMoneyCapMinor(), config.defaultXpCap());
+            dailyPersistence = new DailyLimitPersistence(core, database, limits, getLogger());
+        }
         PayoutService nextPayouts = new PayoutService(this, economy, pendingLedger, metrics, config.moneyScale(), config.retryLimit());
         JobsRuntime nextRuntime = new JobsRuntime(profiles, registry, config, nextPayouts);
-        BlockActivityRouter nextRouter = new BlockActivityRouter(config, registry, profiles, limits, nextPayouts, shadow, metrics);
-        return new PreparedRuntime(registry, config, nextPayouts, nextRuntime, nextRouter);
+        BlockActivityRouter nextRouter = new BlockActivityRouter(config, registry, profiles, limits, dailyPersistence,
+                nextPayouts, shadow, metrics);
+        return new PreparedRuntime(registry, config, nextPayouts, nextRuntime, nextRouter, loaded.messages());
     }
 
     private void installPrepared(PreparedRuntime prepared) {
         payouts = prepared.payouts();
         runtime = prepared.runtime();
         blockRouter = prepared.router();
+        messages = prepared.messages();
+    }
+
+    private void acceptProfileDefinitions(PreparedRuntime prepared) {
+        profiles.acceptKnownJobs(prepared.registry().definitions().stream().map(definition -> definition.id()).toList());
     }
 
     private JobsEconomy createEconomy() {
@@ -234,7 +261,7 @@ public final class PlexonJobs extends JavaPlugin {
     private void registerPlaceholderApi() {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) return;
         try {
-            expansion = new PlexonJobsExpansion(runtime, limits);
+            expansion = new PlexonJobsExpansion(runtime, limits, dailyPersistence, getPluginMeta().getVersion());
             if (!expansion.register()) {
                 getLogger().warning("PlaceholderAPI rejected the PlexonJobs expansion registration.");
                 expansion = null;
@@ -278,6 +305,8 @@ public final class PlexonJobs extends JavaPlugin {
             List<UUID> online = Bukkit.getOnlinePlayers().stream().map(player -> player.getUniqueId()).toList();
             profiles.sweepOnline(online);
             profiles.flushDirty();
+            dailyPersistence.sweepOnline(online);
+            dailyPersistence.flushDirty();
             flushShadowAsync();
         }, cfg.saveIntervalTicks(), cfg.saveIntervalTicks()));
     }
@@ -353,11 +382,14 @@ public final class PlexonJobs extends JavaPlugin {
     public JobsDatabase database() { return database; }
     public JobsRuntime runtime() { return runtime; }
     public DailyLimitService limits() { return limits; }
+    public DailyLimitPersistence dailyPersistence() { return dailyPersistence; }
     public PayoutService payouts() { return payouts; }
     public ShadowLedger shadow() { return shadow; }
     public JobsMetrics metrics() { return metrics; }
     public LegacyJobsMigration migration() { return migration; }
+    public Messages messages() { return messages; }
+    public JobsMenuController menus() { return menus; }
 
     private record PreparedRuntime(JobRegistry registry, JobsConfig config, PayoutService payouts,
-                                   JobsRuntime runtime, BlockActivityRouter router) {}
+                                   JobsRuntime runtime, BlockActivityRouter router, Messages messages) {}
 }

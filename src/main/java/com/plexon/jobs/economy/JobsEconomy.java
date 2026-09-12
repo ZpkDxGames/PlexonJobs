@@ -7,6 +7,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface JobsEconomy {
+    /** Refreshes the backing provider when the implementation supports dynamic service discovery. */
+    default void refresh() { }
+
     boolean available();
     PayoutResult deposit(UUID playerId, OfflinePlayer player, BigDecimal amount);
     Optional<BigDecimal> balance(OfflinePlayer player);
