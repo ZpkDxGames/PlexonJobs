@@ -18,7 +18,6 @@ import java.util.Locale;
 
 public final class JobsCommand implements TabExecutor {
     private final PlexonJobs plugin;
-
     public JobsCommand(PlexonJobs plugin) { this.plugin = plugin; }
 
     @Override
@@ -28,20 +27,25 @@ public final class JobsCommand implements TabExecutor {
             return true;
         }
         var runtime = plugin.runtime();
-        if (args.length == 0 || args[0].equalsIgnoreCase("browse")) {
-            plugin.menus().openOverview(player);
+        if (args.length == 0) {
+            plugin.menus().openDashboard(player);
             return true;
         }
         String sub = args[0].toLowerCase(Locale.ROOT);
+        if (runtime.registry().find(sub).isPresent()) {
+            plugin.menus().openDetails(player, sub);
+            return true;
+        }
         switch (sub) {
+            case "browse" -> plugin.menus().openBrowser(player);
+            case "profile" -> plugin.menus().openProfile(player);
             case "join" -> {
                 if (args.length < 2) return usage(player, "/jobs join <job>");
                 var job = runtime.registry().find(args[1]).orElse(null);
                 PlexonJobsAPI.Result result = runtime.joinJob(player.getUniqueId(), args[1]);
-                if (result.success() && job != null) {
-                    player.sendMessage(plugin.messages().render("joined",
-                            Placeholder.component("job", plugin.messages().parse(job.displayName()))));
-                } else sendFailure(player, result);
+                if (result.success() && job != null) player.sendMessage(plugin.messages().render("joined",
+                        Placeholder.component("job", plugin.messages().parse(job.displayName()))));
+                else sendFailure(player, result);
             }
             case "leave" -> {
                 if (args.length < 2) return usage(player, "/jobs leave <job>");
@@ -55,10 +59,9 @@ public final class JobsCommand implements TabExecutor {
                     return usage(player, "/jobs leave " + job.id() + " confirm");
                 }
                 PlexonJobsAPI.Result result = runtime.leaveJob(player.getUniqueId(), job.id());
-                if (result.success()) {
-                    player.sendMessage(plugin.messages().render("left",
-                            Placeholder.component("job", plugin.messages().parse(job.displayName()))));
-                } else sendFailure(player, result);
+                if (result.success()) player.sendMessage(plugin.messages().render("left",
+                        Placeholder.component("job", plugin.messages().parse(job.displayName()))));
+                else sendFailure(player, result);
             }
             case "leaveall" -> {
                 if (!runtime.config().keepLevelOnLeave() && !confirmed(args, 1)) {
@@ -70,22 +73,12 @@ public final class JobsCommand implements TabExecutor {
             }
             case "info" -> {
                 if (args.length < 2) return usage(player, "/jobs info <job>");
-                var definition = runtime.registry().find(args[1]).orElse(null);
-                if (definition == null) {
-                    player.sendMessage(plugin.messages().render("unknown-job"));
-                    return true;
-                }
-                player.sendMessage(plugin.messages().parse(definition.displayName())
-                        .append(Component.text(" (" + definition.id() + ")", NamedTextColor.DARK_GRAY)));
-                player.sendMessage(Component.text("Status: ", NamedTextColor.GRAY)
-                        .append(Component.text(definition.enabled() ? "available" : "unavailable",
-                                definition.enabled() ? NamedTextColor.GREEN : NamedTextColor.RED)));
-                player.sendMessage(Component.text("Max level: " + definition.maxLevel() +
-                        " | Core-native break rules: " + definition.breakRewards().size(), NamedTextColor.GRAY));
+                if (runtime.registry().find(args[1]).isEmpty()) player.sendMessage(plugin.messages().render("unknown-job"));
+                else plugin.menus().openDetails(player, args[1]);
             }
             case "stats" -> showStats(player, args.length >= 2 ? Bukkit.getPlayerExact(args[1]) : player);
             case "earnings" -> showEarnings(player);
-            default -> usage(player, "/jobs [browse|info|join|leave|leaveall|stats|earnings]");
+            default -> usage(player, "/jobs [browse|profile|<job>|info|join|leave|leaveall|stats|earnings]");
         }
         return true;
     }
@@ -119,10 +112,8 @@ public final class JobsCommand implements TabExecutor {
         long total = 0;
         for (var job : plugin.runtime().registry().definitions()) {
             long amount = plugin.limits().view(player.getUniqueId(), job.id()).moneyMinor();
-            if (amount > 0) {
-                player.sendMessage(Component.text(job.id() + ": ", NamedTextColor.GRAY)
-                        .append(Component.text(Money.format(amount, plugin.runtime().config().moneyScale()), NamedTextColor.GREEN)));
-            }
+            if (amount > 0) player.sendMessage(Component.text(job.id() + ": ", NamedTextColor.GRAY)
+                    .append(Component.text(Money.format(amount, plugin.runtime().config().moneyScale()), NamedTextColor.GREEN)));
             total = Math.addExact(total, amount);
         }
         player.sendMessage(Component.text("Today: ", NamedTextColor.GOLD)
@@ -146,21 +137,22 @@ public final class JobsCommand implements TabExecutor {
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) return filter(List.of("browse", "info", "join", "leave", "leaveall", "stats", "earnings"), args[0]);
-        if (args.length == 2 && List.of("info", "join", "leave").contains(args[0].toLowerCase(Locale.ROOT))) {
+        if (args.length == 1) {
+            List<String> values = new java.util.ArrayList<>(List.of("browse", "profile", "info", "join", "leave", "leaveall", "stats", "earnings"));
+            values.addAll(plugin.runtime().registry().definitions().stream().map(d -> d.id()).toList());
+            return filter(values, args[0]);
+        }
+        if (args.length == 2 && List.of("info", "join", "leave").contains(args[0].toLowerCase(Locale.ROOT)))
             return filter(plugin.runtime().registry().definitions().stream().map(d -> d.id()).toList(), args[1]);
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("leaveall") && !plugin.runtime().config().keepLevelOnLeave()) {
+        if (args.length == 2 && args[0].equalsIgnoreCase("leaveall") && !plugin.runtime().config().keepLevelOnLeave())
             return filter(List.of("confirm"), args[1]);
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("leave") && !plugin.runtime().config().keepLevelOnLeave()) {
+        if (args.length == 3 && args[0].equalsIgnoreCase("leave") && !plugin.runtime().config().keepLevelOnLeave())
             return filter(List.of("confirm"), args[2]);
-        }
         return List.of();
     }
 
     private static List<String> filter(List<String> values, String prefix) {
         String p = prefix.toLowerCase(Locale.ROOT);
-        return values.stream().filter(value -> value.toLowerCase(Locale.ROOT).startsWith(p)).toList();
+        return values.stream().distinct().filter(value -> value.toLowerCase(Locale.ROOT).startsWith(p)).toList();
     }
 }

@@ -1,93 +1,58 @@
 # Changelog
 
-## 2.0.0 — Complete jobs and dynamic player feedback
+## 2.5.0 — Performance architecture and premium jobs dashboard
 
-### All built-in jobs
-- Enables all 12 built-in job families: Miner, Woodcutter, Digger, Farmer, Hunter, Fisher, Builder, Crafter, Blacksmith, Brewer, Enchanter and Explorer.
-- Preserves PlexonCore as the authoritative high-frequency natural block-break gateway for Miner/Woodcutter/Digger.
-- Adds narrow Paper activity adapters for activity types not currently exposed by PlexonCore.
-- Generalizes job definitions to indexed activity/key reward maps with exact keys plus optional `*` fallback.
-- Routes every activity through one `ActivityGrantService`, keeping runtime mode, profile readiness, daily caps, XP/level events, payouts, metrics and SHADOW semantics consistent.
+### High-frequency routing
+- Adds `CompiledJobRoutes` with typed BREAK routes, precompiled exact/wildcard activity routes and a bounded 64-job bit-mask model.
+- Adds `ActivityInterestIndex` / `PlayerExecutionState` so callbacks answer player membership/readiness in O(1) without reconstructing profile membership.
+- BREAK now applies the compiled route mask before Bukkit player lookup and uses a specialized typed grant entry point with no duplicate route resolution.
+- Moves profile/daily hydration responsibility to player lifecycle/readiness callbacks; gameplay fails closed when state is not ready.
 
-### Native activity safety
-- Farmer rewards mature crops and supported harvest-without-breaking actions.
-- Hunter records creature spawn provenance in PDC and fails closed for unknown/disallowed origins; spawner/egg/breeding/command/plugin-custom origins are excluded by default.
-- Fisher rewards successful catch results.
-- Builder uses a bounded per-player TTL cache to suppress rapid same-position placement farming.
-- Crafter consumes Paper post-craft result events.
-- Blacksmith rewards furnace extraction, smithing result collection and Mending repairs.
-- Brewer attributes completed batches only to recent player interaction with the brewing stand.
-- Enchanter rewards successful enchant operations.
-- Explorer samples biome/environment discovery periodically, persists discoveries in player PDC and avoids a movement-event hot path.
+### Dynamic runtime topology
+- Replaces the monolithic native listener with independently controlled Farmer, Hunter, Fisher, Builder, Crafter/Smelter, Blacksmith, Brewer and Enchanter listeners.
+- Registers each listener family only while at least one online participant needs its activity.
+- Dynamically subscribes PlexonCore only to the active union of break-job materials and closes the subscription when no online break-job participant exists.
+- Explorer sampling runs only while at least one online Explorer exists and iterates the participant collection instead of all online players.
+- Hunter defaults to `MEMORY` origin tracking, avoiding per-spawn PDC writes; `PERSISTENT_PDC` remains opt-in.
 
-### Dynamic feedback
-- Adds configurable, permission-aware reward BossBars with coalesced XP/money deltas and current level progress.
-- Reuses one mutable BossBar per active player; no timer/task is created per reward.
-- Adds throttled reward sounds.
-- Adds configurable level-up title/subtitle and level-up sound.
-- Adds `PlexonJobRewardGrantedEvent` as the post-authoritative-grant presentation/integration event.
-- Adds `plexonjobs.feedback`, enabled by default.
-- Existing `messages.yml` files inherit embedded defaults for new feedback templates.
+### Feedback and public API events
+- Introduces direct internal `RewardFeedbackSink` callbacks so internal feedback does not depend on PlexonJobs public Bukkit events.
+- Reward callbacks accumulate only compact dirty feedback state.
+- One global bounded flush renders dirty BossBars at `performance.feedback-flush-ticks` and reuses one BossBar per player.
+- Public payout/XP/reward/level events remain compatible but are allocated/dispatched by the activity pipeline only when registered listeners exist.
 
-### Admin / diagnostics
-- `/jobsadmin diagnostics` reports native activity type count and active feedback bars.
-- `/jobsadmin simulate <job> <activity> <key> <count>` can simulate any configured 2.0 reward without granting state.
-- The 1.1 `/jobsadmin simulate <job> <material> <count>` block-break form remains as a compatibility shortcut.
+### Premium GUI
+- `/jobs` is now a 45-slot dashboard with profile, active-job, daily earnings, pending payout/economy and help summaries.
+- Adds a 54-slot paginated Job Browser with All / Joined / Available filters.
+- Adds a 45-slot Player Profile with active-job cards and authoritative loading states.
+- Expands Job Details to 45 slots with a seven-segment progress bar, XP/level/daily-cap information and join/leave control.
+- Uses Paper Dialog API for destructive leave confirmation when leaving resets progression.
+- Retains custom `InventoryHolder` identity, centralized click/drag routing, Adventure components and no title/name/lore action identity.
 
-### Preserved correctness contracts
-- Gameplay activity callbacks perform no SQL, Vault deposit, YAML parsing or task creation.
-- Profile-load retry/backoff, exact transactional profile snapshots, accepted-runtime job reconciliation, daily snapshot revision guards, SHADOW atomicity and graceful shutdown write barriers remain intact.
-- Vault provider discovery remains recoverable during coalesced payout flushing.
-- Activity safety/cache/sampling settings are restart-only; reward tables/messages/feedback presentation remain fail-closed reloadable.
+### Diagnostics and verification
+- Adds counters for global/player/readiness/origin rejection, route matches, committed grants, listener states, Core block subscription state/material count, public-event gating and feedback accumulation/visual flushes.
+- Adds deterministic source/behavior tests for compiled routing, topology, hot-path boundaries, Hunter memory mode, Explorer participant sampling, feedback batching and GUI identity.
+- Stable release workflows require exact `2.5.0`, Java class major 69, all 12 default jobs, new runtime/distribution classes and zero test failures/errors/skips.
+
+### Preserved correctness boundaries
+- Preserves natural block provenance and player-placed rejection, SHADOW mode, daily caps, exact profile persistence, obsolete-job reconciliation, stale-write protection, graceful shutdown barriers, coalesced Vault payout, Vault recovery, Builder repeat suppression, Brewer attribution, Blacksmith rename-only anti-farm behavior, public API/events, PlaceholderAPI and fail-closed malformed reload.
 - Cross-process exactly-once Vault payout semantics remain explicitly **not claimed**.
 - Daily-cap abrupt-crash exactness remains explicitly **not claimed**.
 
-### Stable release boundary
-- Version is stable `2.0.0`; no prerelease version or RC publisher is used.
-- Stable rollback is `v1.1.0`, source `72f9225c2d337422d617ff2b5638363eeb98a3cf`, JAR SHA-256 `bbdc7027800029c7588005860befb0f2111cb73352f82aadebce48c3dd594e9f`.
-- Exact merged-main CI and the stable publisher must both rebuild/test/verify the 2.0 source before `v2.0.0` publication.
+### Stable boundary
+- Target is stable `v2.5.0`; no RC/prerelease/snapshot/temp public candidate tag is used.
+- Rollback is `v2.0.0`, source `985244c61a3c07c70fb48b97ccb2883fb55149b5`, JAR SHA-256 `686710eed31a6c10e9d78cb7fccc7fdc355330a371a098ba3731940ef048ad0a`.
+- Live PlexonCraft runtime certification is separate and is recorded as `NOT_EXECUTED` unless real host evidence exists.
+
+## 2.0.0 — Complete jobs and dynamic player feedback
+- Enabled all 12 built-in job families and generalized exact/wildcard activity rewards.
+- Preserved PlexonCore as the natural block-break authority for Miner/Woodcutter/Digger.
+- Added native activity safety for Farmer, Hunter, Fisher, Builder, Crafter, Blacksmith, Brewer, Enchanter and Explorer.
+- Added reusable BossBar/reward feedback, public reward event, recovery/persistence hardening and stable-only source certification.
 
 ## 1.1.0 — Stable full revamp
-
-### Player product / UX
-- Replaces the display-only 54-slot jobs inventory with a compact interactive 36-slot overview plus 27-slot details/confirmation flow.
-- Uses custom `InventoryHolder` identity and explicit slot actions; titles, names and lore are no longer behavior identity.
-- Centralizes click/drag routing, blocks unsafe transfer paths and defers inventory transitions caused by clicks.
-- Makes the GUI the primary join/leave discovery surface while preserving direct command fallbacks.
-- Requires explicit confirmation before leave/leaveall actions that would reset progression.
-- Keeps all configured job families discoverable and removes the non-functional `/jobs top` branch.
-
-### Messages / integration
-- Activates `messages.yml` as the configurable Adventure/MiniMessage surface.
-- Preserves upgrades from older message files by filling newly introduced keys from embedded defaults.
-- Rejects malformed/non-string message configuration before replacing the accepted runtime.
-- Removes legacy `ChatColor` output from the revamp surface.
-- Registers the public `PlexonJobsAPI` service during normal initial enable.
-- PlaceholderAPI reports the actual plugin runtime version.
-- Daily-earnings placeholders remain blank until authoritative same-day state is hydrated rather than reporting false zero.
-- Public API XP mutations reject negative input; zero XP is a non-mutating no-op.
-
-### Persistence / recovery
-- Activates schema-2 `daily_earnings` as a graceful-restart-safe same-day cap snapshot store without a schema bump.
-- Hydrates current-day counters asynchronously per player; PRIMARY work fails closed until hydration completes.
-- Coalesces absolute daily snapshots through Core IO and uses revisions so stale completions cannot clear newer dirty state.
-- Retries transient profile-load failures after bounded backoff instead of leaving a player permanently failed until restart.
-- Persists `player_jobs` as an exact transactional snapshot.
-- Reconciles obsolete/renamed job IDs only after a runtime candidate has been accepted, then marks affected profiles dirty so stale SQLite rows are removed.
-- Refreshes Vault economy provider discovery during payout flushes so temporary provider loss can recover without a PlexonJobs restart.
-- Graceful shutdown retries provider discovery, settles SHADOW IO, flushes final SHADOW/daily state and then writes final authoritative profiles.
-
-### Verification / release discipline
-- Stable version is `1.1.0`; no RC publisher remains in the source tree.
-- Branch/PR CI proves ancestry from stable `v1.0.0`, provisions verified PlexonCore 2.0.4, runs tests/build/Javadocs/distribution verification and emits exact provenance artifacts.
-- The stable publisher accepts only `1.1.0`, only when `release/stable` points exactly at merged `main`, and verifies the remote stable tag plus public JAR/checksum/test/provenance assets.
+- Replaced display-only GUI with holder-based interactive overview/details flow.
+- Added configurable MiniMessage surface, PlaceholderAPI fixes, daily-cap persistence, profile retry/exact snapshots, Vault provider recovery and shutdown barriers.
 
 ## 1.0.0 — Stable
-
-- PlexonCore-native job membership, progression, fixed-unit payout accrual, GUI/admin commands, public API/events and PlaceholderAPI integration.
-- Miner, Woodcutter and Digger use the authoritative Core natural-origin block-break gateway.
-- SHADOW / PRIMARY / DISABLED runtime modes, bounded non-granting simulation and fail-closed legacy migration tooling.
-- Final profile shutdown persistence waits for older asynchronous saves before writing the authoritative snapshot.
-- SHADOW aggregate batches persist atomically in one SQLite transaction.
-- `config.yml` and `jobs.yml` are strictly parsed before reload can mutate/compile the next runtime.
-- Final stable `v1.0.0` source: `24b8e61950cb3a01112351e19c733d9a80953a03`.
+- Introduced PlexonCore-native membership/progression/payout architecture, SHADOW/PRIMARY/DISABLED modes, public API/events and fail-closed migration tooling.

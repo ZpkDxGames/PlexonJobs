@@ -30,9 +30,7 @@ import java.util.Set;
 public final class ConfigLoader {
     private final JavaPlugin plugin;
 
-    public ConfigLoader(JavaPlugin plugin) {
-        this.plugin = plugin;
-    }
+    public ConfigLoader(JavaPlugin plugin) { this.plugin = plugin; }
 
     public Loaded load() {
         plugin.saveDefaultConfig();
@@ -43,15 +41,14 @@ public final class ConfigLoader {
         File configFile = new File(plugin.getDataFolder(), "config.yml");
         validateYaml(configFile, "config.yml");
         plugin.reloadConfig();
-
         ConfigurationSection cfg = plugin.getConfig();
+
         int moneyScale = integer(cfg, "payout.money-scale", 2, 0, 6);
         BigDecimal moneyCap = decimal(cfg, "limits.default-money-per-day", new BigDecimal("5000.00"));
         if (moneyCap.signum() < 0) throw invalid("limits.default-money-per-day", "must be >= 0");
         String payoutMode = string(cfg, "payout.mode", "COALESCED").trim().toUpperCase(Locale.ROOT);
-        if (!payoutMode.equals("COALESCED")) {
-            throw invalid("payout.mode", "must be COALESCED; event-path Vault deposits are forbidden");
-        }
+        if (!payoutMode.equals("COALESCED")) throw invalid("payout.mode", "must be COALESCED; event-path Vault deposits are forbidden");
+
         Set<String> gameModes = normalizedStringSet(cfg, "gameplay.allowed-game-modes", List.of("SURVIVAL"));
         for (String mode : gameModes) {
             try { GameMode.valueOf(mode); }
@@ -64,6 +61,8 @@ public final class ConfigLoader {
             try { CreatureSpawnEvent.SpawnReason.valueOf(reason); }
             catch (IllegalArgumentException ex) { throw invalid("activity.hunter.allowed-spawn-reasons", "unknown spawn reason " + reason); }
         }
+        ActivityConfig.HunterOriginTracking hunterOriginTracking = ActivityConfig.HunterOriginTracking.parse(
+                string(cfg, "activity.hunter.origin-tracking", "MEMORY"));
 
         FeedbackConfig feedback = new FeedbackConfig(
                 bool(cfg, "feedback.enabled", true),
@@ -81,6 +80,12 @@ public final class ConfigLoader {
         );
         validateVolumePitch(feedback);
 
+        PerformanceConfig performance = new PerformanceConfig(
+                bool(cfg, "performance.dynamic-listeners", true),
+                bool(cfg, "performance.dynamic-core-block-subscription", true),
+                integer(cfg, "performance.feedback-flush-ticks", 3, 1, 20)
+        );
+
         JobsConfig jobsConfig = new JobsConfig(
                 RuntimeMode.parse(string(cfg, "runtime.mode", "PRIMARY")),
                 nonBlank(string(cfg, "runtime.core-api-range", ">=2.0 <3.0"), "runtime.core-api-range"),
@@ -96,14 +101,13 @@ public final class ConfigLoader {
                 parseZone(string(cfg, "limits.reset-timezone", "America/Sao_Paulo")),
                 gameModes,
                 normalizedStringSet(cfg, "gameplay.disabled-worlds", List.of()),
-                new ActivityConfig(
-                        hunterReasons,
+                new ActivityConfig(hunterReasons, hunterOriginTracking,
                         integer(cfg, "activity.builder.repeat-window-seconds", 600, 1, 86_400),
                         integer(cfg, "activity.builder.max-tracked-positions", 4_096, 128, 65_536),
                         integer(cfg, "activity.brewer.attribution-seconds", 90, 5, 600),
-                        integer(cfg, "activity.explorer.sample-ticks", 40, 10, 1_200)
-                ),
-                feedback
+                        integer(cfg, "activity.explorer.sample-ticks", 40, 10, 1_200)),
+                feedback,
+                performance
         );
 
         File jobsFile = new File(plugin.getDataFolder(), "jobs.yml");
@@ -119,9 +123,7 @@ public final class ConfigLoader {
             if (!id.matches("[a-z0-9._-]{1,64}")) throw new IllegalArgumentException("Invalid job id: " + rawId);
             if (!ids.add(id)) throw new IllegalArgumentException("Duplicate job id: " + id);
             Object rawSection = jobs.get(rawId);
-            if (!(rawSection instanceof ConfigurationSection section)) {
-                throw new IllegalArgumentException("Job " + rawId + " must be a map");
-            }
+            if (!(rawSection instanceof ConfigurationSection section)) throw new IllegalArgumentException("Job " + rawId + " must be a map");
             String display = nonBlank(string(section, "display-name", id), id + ".display-name");
             Material icon = requireMaterial(string(section, "icon", "PAPER"));
             boolean enabled = bool(section, "enabled", true);
@@ -131,6 +133,7 @@ public final class ConfigLoader {
             definitions.add(new JobDefinition(id, display, icon, enabled, maxLevel, breakRewards, activityRewards));
         }
         if (definitions.isEmpty()) throw new IllegalStateException("jobs.yml must define at least one job");
+        if (definitions.size() > 64) throw new IllegalStateException("jobs.yml may define at most 64 jobs in PlexonJobs 2.5.0");
 
         File messagesFile = new File(plugin.getDataFolder(), "messages.yml");
         validateYaml(messagesFile, "messages.yml");
@@ -142,9 +145,7 @@ public final class ConfigLoader {
         Map<Material, ActivityReward> rewards = new EnumMap<>(Material.class);
         Object rawBreak = job.get("break");
         if (rawBreak == null) return rewards;
-        if (!(rawBreak instanceof ConfigurationSection section)) {
-            throw new IllegalArgumentException("Job " + id + " break must be a map");
-        }
+        if (!(rawBreak instanceof ConfigurationSection section)) throw new IllegalArgumentException("Job " + id + " break must be a map");
         for (String materialName : section.getKeys(false)) {
             Material material = requireMaterial(materialName);
             rewards.put(material, parseReward(section, materialName, id + "/break/" + materialName, moneyScale));
@@ -159,9 +160,7 @@ public final class ConfigLoader {
             String path = type.name().toLowerCase(Locale.ROOT);
             Object raw = job.get(path);
             if (raw == null) continue;
-            if (!(raw instanceof ConfigurationSection section)) {
-                throw new IllegalArgumentException("Job " + id + " " + path + " must be a map");
-            }
+            if (!(raw instanceof ConfigurationSection section)) throw new IllegalArgumentException("Job " + id + " " + path + " must be a map");
             Map<String, ActivityReward> keyed = new LinkedHashMap<>();
             for (String rawKey : section.getKeys(false)) {
                 String key = normalizeActivityKey(rawKey, id, path);
@@ -174,31 +173,24 @@ public final class ConfigLoader {
 
     private static ActivityReward parseReward(ConfigurationSection parent, String key, String label, int moneyScale) {
         Object rawReward = parent.get(key);
-        if (!(rawReward instanceof ConfigurationSection reward)) {
-            throw new IllegalArgumentException("Reward for " + label + " must be a map");
-        }
+        if (!(rawReward instanceof ConfigurationSection reward)) throw new IllegalArgumentException("Reward for " + label + " must be a map");
         BigDecimal rawMoney = decimal(reward, "money", BigDecimal.ZERO);
         if (rawMoney.signum() < 0) throw new IllegalArgumentException("Money reward for " + label + " must be >= 0");
-        long money = Money.toMinor(rawMoney, moneyScale);
-        long xp = longInteger(reward, "xp", 0L, 0L, Long.MAX_VALUE);
-        return new ActivityReward(xp, money);
+        return new ActivityReward(longInteger(reward, "xp", 0L, 0L, Long.MAX_VALUE), Money.toMinor(rawMoney, moneyScale));
     }
 
     private static String normalizeActivityKey(String raw, String jobId, String activity) {
         if (raw == null || raw.isBlank()) throw new IllegalArgumentException("Blank reward key for " + jobId + "/" + activity);
         String key = raw.trim().toUpperCase(Locale.ROOT);
         if (key.equals("*")) return key;
-        if (!key.matches("[A-Z0-9_.:-]{1,128}")) {
-            throw new IllegalArgumentException("Invalid reward key for " + jobId + "/" + activity + ": " + raw);
-        }
+        if (!key.matches("[A-Z0-9_.:-]{1,128}")) throw new IllegalArgumentException("Invalid reward key for " + jobId + "/" + activity + ": " + raw);
         return key;
     }
 
     static void validateYaml(File file, String label) {
         YamlConfiguration yaml = new YamlConfiguration();
-        try {
-            yaml.load(file);
-        } catch (IOException | InvalidConfigurationException failure) {
+        try { yaml.load(file); }
+        catch (IOException | InvalidConfigurationException failure) {
             throw new IllegalArgumentException("Invalid YAML in " + label + "; current runtime remains unchanged", failure);
         }
     }
@@ -223,16 +215,13 @@ public final class ConfigLoader {
     }
 
     private static int integer(ConfigurationSection section, String path, int fallback, int min, int max) {
-        long value = longInteger(section, path, fallback, min, max);
-        return Math.toIntExact(value);
+        return Math.toIntExact(longInteger(section, path, fallback, min, max));
     }
 
     private static long longInteger(ConfigurationSection section, String path, long fallback, long min, long max) {
         Object raw = section.get(path);
         if (raw == null) return fallback;
-        if (!(raw instanceof Byte || raw instanceof Short || raw instanceof Integer || raw instanceof Long)) {
-            throw invalid(path, "must be an integer");
-        }
+        if (!(raw instanceof Byte || raw instanceof Short || raw instanceof Integer || raw instanceof Long)) throw invalid(path, "must be an integer");
         long value = ((Number) raw).longValue();
         if (value < min || value > max) throw invalid(path, "must be between " + min + " and " + max);
         return value;
@@ -244,9 +233,7 @@ public final class ConfigLoader {
         try {
             if (raw instanceof Number number) return new BigDecimal(number.toString());
             if (raw instanceof String value) return new BigDecimal(value.trim());
-        } catch (NumberFormatException ex) {
-            throw invalid(path, "must be a decimal number");
-        }
+        } catch (NumberFormatException ex) { throw invalid(path, "must be a decimal number"); }
         throw invalid(path, "must be a decimal number");
     }
 
@@ -299,5 +286,5 @@ public final class ConfigLoader {
         return new IllegalArgumentException("Invalid configuration at " + path + ": " + detail);
     }
 
-    public record Loaded(JobsConfig config, List<JobDefinition> definitions, Messages messages) {}
+    public record Loaded(JobsConfig config, List<JobDefinition> definitions, Messages messages) { }
 }

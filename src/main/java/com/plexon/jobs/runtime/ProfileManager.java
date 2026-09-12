@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -30,6 +31,7 @@ public final class ProfileManager {
     private final Set<UUID> saving = ConcurrentHashMap.newKeySet();
     private final Map<UUID, CompletableFuture<Void>> saveFutures = new ConcurrentHashMap<>();
     private volatile Set<String> acceptedJobIds;
+    private volatile Consumer<UUID> readyListener = ignored -> { };
 
     public ProfileManager(PlexonCoreAPI core, JobsDatabase database, Logger logger) {
         this.core = core;
@@ -38,19 +40,13 @@ public final class ProfileManager {
     }
 
     public PlayerJobsProfile get(UUID playerId) { return profiles.get(playerId); }
+    public void readyListener(Consumer<UUID> listener) { readyListener = listener == null ? ignored -> { } : listener; }
 
-    /**
-     * Accepts the job-id set of the live runtime and removes obsolete persisted definitions from
-     * already loaded profiles. Pruned profiles are dirtied so the next exact snapshot removes the
-     * stale rows from SQLite as well.
-     */
     public void acceptKnownJobs(Collection<String> jobIds) {
         Set<String> accepted = Set.copyOf(jobIds);
         acceptedJobIds = accepted;
         profiles.forEach((playerId, profile) -> {
-            if (profile.state() == PlayerJobsProfile.State.READY && profile.retainJobs(accepted)) {
-                dirty.add(playerId);
-            }
+            if (profile.state() == PlayerJobsProfile.State.READY && profile.retainJobs(accepted)) dirty.add(playerId);
         });
     }
 
@@ -67,7 +63,6 @@ public final class ProfileManager {
             }
             if (existing.state() != PlayerJobsProfile.State.FAILED) return existing;
             if (loadRetryAfter.getOrDefault(playerId, 0L) > System.nanoTime()) return existing;
-
             PlayerJobsProfile retryProfile = new PlayerJobsProfile(playerId, PlayerJobsProfile.State.LOADING);
             if (!profiles.replace(playerId, existing, retryProfile)) continue;
             long generation = generations.merge(playerId, 1L, Long::sum);
@@ -82,9 +77,7 @@ public final class ProfileManager {
         if (profile != null) profile.touch();
     }
 
-    public void flushDirty() {
-        for (UUID playerId : Set.copyOf(dirty)) saveAsync(playerId);
-    }
+    public void flushDirty() { for (UUID playerId : Set.copyOf(dirty)) saveAsync(playerId); }
 
     public void sweepOnline(Collection<UUID> online) {
         Set<UUID> onlineSet = Set.copyOf(online);
@@ -102,22 +95,14 @@ public final class ProfileManager {
         }
     }
 
-    /**
-     * Waits for every async profile write that was already scheduled at the shutdown boundary.
-     * The caller must stop event/task producers before invoking this method so no newer async save
-     * can be created after the snapshot of futures is taken.
-     */
     public void awaitInFlightSaves() {
         List<CompletableFuture<Void>> futures = List.copyOf(saveFutures.values());
         if (futures.isEmpty()) return;
-        CompletableFuture<?>[] settled = futures.stream()
-                .map(future -> future.handle((unused, error) -> null))
-                .toArray(CompletableFuture[]::new);
+        CompletableFuture<?>[] settled = futures.stream().map(future -> future.handle((unused, error) -> null)).toArray(CompletableFuture[]::new);
         CompletableFuture.allOf(settled).join();
     }
 
     public void saveAllBlocking() {
-        // An older async snapshot must never be allowed to land after the final authoritative save.
         awaitInFlightSaves();
         for (UUID playerId : Set.copyOf(profiles.keySet())) {
             PlayerJobsProfile profile = profiles.get(playerId);
@@ -155,7 +140,10 @@ public final class ProfileManager {
                         Set<String> accepted = acceptedJobIds;
                         boolean pruned = accepted != null && loaded.retainJobs(accepted);
                         loadRetryAfter.remove(playerId);
-                        if (profiles.replace(playerId, loadingProfile, loaded) && pruned) dirty.add(playerId);
+                        if (profiles.replace(playerId, loadingProfile, loaded)) {
+                            if (pruned) dirty.add(playerId);
+                            notifyReady(playerId);
+                        }
                     }));
         } catch (RuntimeException failure) {
             loading.remove(playerId);
@@ -165,6 +153,11 @@ public final class ProfileManager {
             }
             logger.log(Level.SEVERE, "Failed to schedule PlexonJobs profile load " + playerId + "; retrying after backoff", failure);
         }
+    }
+
+    private void notifyReady(UUID playerId) {
+        try { readyListener.accept(playerId); }
+        catch (RuntimeException failure) { logger.log(Level.SEVERE, "Profile ready listener failed for " + playerId, failure); }
     }
 
     private void saveAsync(UUID playerId) {
@@ -180,17 +173,15 @@ public final class ProfileManager {
         try {
             CompletableFuture<Void> future = core.scheduler().runIo(() -> database.save(snapshot, name));
             saveFutures.put(playerId, future);
-            future.whenComplete((unused, error) ->
-                    core.scheduler().runPrimary(() -> {
-                        saveFutures.remove(playerId, future);
-                        saving.remove(playerId);
-                        if (error != null) {
-                            logger.log(Level.SEVERE, "Failed to save PlexonJobs profile " + playerId, error);
-                        } else {
-                            PlayerJobsProfile current = profiles.get(playerId);
-                            if (current != null && current.revision() == snapshot.revision()) dirty.remove(playerId);
-                        }
-                    }));
+            future.whenComplete((unused, error) -> core.scheduler().runPrimary(() -> {
+                saveFutures.remove(playerId, future);
+                saving.remove(playerId);
+                if (error != null) logger.log(Level.SEVERE, "Failed to save PlexonJobs profile " + playerId, error);
+                else {
+                    PlayerJobsProfile current = profiles.get(playerId);
+                    if (current != null && current.revision() == snapshot.revision()) dirty.remove(playerId);
+                }
+            }));
         } catch (RuntimeException failure) {
             saveFutures.remove(playerId);
             saving.remove(playerId);

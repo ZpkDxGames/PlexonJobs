@@ -1,6 +1,5 @@
 package com.plexon.jobs.runtime;
 
-import com.plexon.jobs.model.ActivityType;
 import com.zpkdxgames.plexoncore.context.BlockOrigin;
 import com.zpkdxgames.plexoncore.context.CoreBlockBreakContext;
 import org.bukkit.Bukkit;
@@ -8,31 +7,47 @@ import org.bukkit.entity.Player;
 
 import java.util.Objects;
 
-/** Keeps PlexonCore as the single high-frequency block-break authority for Miner/Woodcutter/Digger. */
+/** Typed BREAK dispatch with the player-interest gate before Bukkit player lookup. */
 public final class BlockActivityRouter {
-    private final JobRegistry registry;
+    private final CompiledJobRoutes routes;
+    private final ActivityInterestIndex interest;
     private final ActivityGrantService grants;
+    private final JobsMetrics metrics;
 
-    public BlockActivityRouter(JobRegistry registry, ActivityGrantService grants) {
-        this.registry = Objects.requireNonNull(registry);
+    public BlockActivityRouter(CompiledJobRoutes routes, ActivityInterestIndex interest,
+                               ActivityGrantService grants, JobsMetrics metrics) {
+        this.routes = Objects.requireNonNull(routes);
+        this.interest = Objects.requireNonNull(interest);
         this.grants = Objects.requireNonNull(grants);
+        this.metrics = Objects.requireNonNull(metrics);
     }
 
     public void handle(CoreBlockBreakContext context) {
-        if (registry.breakJobs(context.material()).isEmpty()) {
-            grants.fastReject();
+        metrics.eventSeen();
+        CompiledJobRoutes.CompiledRoute route = routes.breakRoute(context.material());
+        if (route.jobMask() == 0L) {
+            metrics.rejectedNoGlobalInterest();
+            return;
+        }
+        PlayerExecutionState state = interest.state(context.playerId());
+        long matched = state.joinedJobMask() & route.jobMask();
+        if (matched == 0L) {
+            metrics.rejectedNoPlayerInterest();
+            return;
+        }
+        if (!state.rewardReady()) {
+            metrics.rejectedNotReady();
             return;
         }
         if (context.origin() != BlockOrigin.NATURAL) {
-            grants.originReject();
+            metrics.rejectedOrigin();
             return;
         }
         Player player = Bukkit.getPlayer(context.playerId());
         if (player == null) {
-            grants.fastReject();
+            metrics.fastReject();
             return;
         }
-        grants.handle(player, ActivityType.BREAK, context.material().name(), 1,
-                "core:block:" + context.eventId());
+        grants.handleBreak(player, context.material(), route, matched, context.eventId());
     }
 }

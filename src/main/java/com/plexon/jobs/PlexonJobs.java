@@ -15,14 +15,17 @@ import com.plexon.jobs.gui.JobsMenuController;
 import com.plexon.jobs.integration.PlexonJobsExpansion;
 import com.plexon.jobs.migration.LegacyJobsMigration;
 import com.plexon.jobs.runtime.ActivityGrantService;
+import com.plexon.jobs.runtime.ActivityInterestIndex;
+import com.plexon.jobs.runtime.ActivityListenerCoordinator;
 import com.plexon.jobs.runtime.BlockActivityRouter;
+import com.plexon.jobs.runtime.CompiledJobRoutes;
+import com.plexon.jobs.runtime.CoreBlockSubscriptionCoordinator;
 import com.plexon.jobs.runtime.DailyLimitPersistence;
 import com.plexon.jobs.runtime.DailyLimitService;
 import com.plexon.jobs.runtime.ExplorerDiscoveryService;
 import com.plexon.jobs.runtime.JobRegistry;
 import com.plexon.jobs.runtime.JobsMetrics;
 import com.plexon.jobs.runtime.JobsRuntime;
-import com.plexon.jobs.runtime.NativeActivityListener;
 import com.plexon.jobs.runtime.PlayerFeedbackService;
 import com.plexon.jobs.runtime.PlayerStateListener;
 import com.plexon.jobs.runtime.ProfileManager;
@@ -30,7 +33,6 @@ import com.plexon.jobs.runtime.RuntimeMode;
 import com.plexon.jobs.runtime.ShadowLedger;
 import com.plexon.jobs.storage.JobsDatabase;
 import com.zpkdxgames.plexoncore.api.PlexonCoreAPI;
-import com.zpkdxgames.plexoncore.event.CoreBlockSubscription;
 import com.zpkdxgames.plexoncore.module.ModuleRegistry;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
@@ -64,15 +66,17 @@ public final class PlexonJobs extends JavaPlugin {
     private volatile JobsRuntime runtime;
     private volatile ActivityGrantService grants;
     private volatile BlockActivityRouter blockRouter;
+    private volatile CompiledJobRoutes compiledRoutes;
+    private volatile ActivityInterestIndex interest;
     private volatile Messages messages;
-    private AutoCloseable blockSubscription;
     private final List<BukkitTask> tasks = new ArrayList<>();
     private PlexonJobsExpansion expansion;
     private LegacyJobsMigration migration;
     private JobsMenuController menus;
-    private NativeActivityListener nativeActivities;
     private ExplorerDiscoveryService explorer;
     private PlayerFeedbackService feedback;
+    private ActivityListenerCoordinator activityListeners;
+    private CoreBlockSubscriptionCoordinator coreBlockSubscriptions;
 
     @Override
     public void onEnable() {
@@ -95,28 +99,34 @@ public final class PlexonJobs extends JavaPlugin {
             profiles = new ProfileManager(core, database, getLogger());
             migration = new LegacyJobsMigration(this);
             economy = createEconomy();
+            feedback = new PlayerFeedbackService(this);
+
             ConfigLoader.Loaded loaded = new ConfigLoader(this).load();
             PreparedRuntime prepared = prepareRuntime(loaded);
-            AutoCloseable subscription = subscribeBlockBreaks(prepared.registry(), prepared.router());
             installPrepared(prepared);
-            blockSubscription = subscription;
             acceptProfileDefinitions(prepared);
+            profiles.readyListener(this::refreshInterest);
+            dailyPersistence.readyListener(this::refreshInterest);
+
+            menus = new JobsMenuController(this);
+            explorer = new ExplorerDiscoveryService(this);
+            activityListeners = new ActivityListenerCoordinator(this);
+            coreBlockSubscriptions = new CoreBlockSubscriptionCoordinator(this);
+            interest.topologyListener(this::reconcileTopology);
 
             registerApiService();
-            menus = new JobsMenuController(this);
-            nativeActivities = new NativeActivityListener(this);
-            explorer = new ExplorerDiscoveryService(this);
-            feedback = new PlayerFeedbackService(this);
             Bukkit.getPluginManager().registerEvents(menus, this);
-            Bukkit.getPluginManager().registerEvents(nativeActivities, this);
-            Bukkit.getPluginManager().registerEvents(feedback, this);
-            Bukkit.getPluginManager().registerEvents(new PlayerStateListener(profiles, dailyPersistence), this);
+            Bukkit.getPluginManager().registerEvents(new PlayerStateListener(this), this);
             registerCommands();
             registerModule();
             registerPlaceholderApi();
+            feedback.refreshCache();
+            warmOnlinePlayers();
+            interest.rebuildOnline();
             scheduleRuntimeTasks();
-            getLogger().info("PlexonJobs " + getPluginMeta().getVersion() + " enabled in " + runtime.config().mode() +
-                    " mode with full activity routing on Core " + core.version().pluginVersion() + " / API " + core.version().apiVersion() + ".");
+            getLogger().info("PlexonJobs " + getPluginMeta().getVersion() + " enabled in " + runtime.config().mode()
+                    + " mode with compiled participation routing on Core " + core.version().pluginVersion()
+                    + " / API " + core.version().apiVersion() + ".");
         } catch (RuntimeException failure) {
             getLogger().log(Level.SEVERE, "PlexonJobs failed to enable safely", failure);
             Bukkit.getPluginManager().disablePlugin(this);
@@ -126,9 +136,13 @@ public final class PlexonJobs extends JavaPlugin {
     @Override
     public void onDisable() {
         cancelTasks();
+        if (explorer != null) explorer.close();
+        if (activityListeners != null) activityListeners.close();
+        if (coreBlockSubscriptions != null) coreBlockSubscriptions.close();
         if (feedback != null) feedback.hideAll();
-        closeBlockSubscription();
         unregisterExpansion();
+        if (profiles != null) profiles.readyListener(null);
+        if (dailyPersistence != null) dailyPersistence.readyListener(null);
         if (payouts != null) {
             while (payouts.totalPending() > 0) {
                 int committed = payouts.flush(runtime == null ? 100 : runtime.config().maxCommitsPerTick());
@@ -144,42 +158,41 @@ public final class PlexonJobs extends JavaPlugin {
             try { core.modules().unregisterOwnedBy(this); } catch (RuntimeException ignored) { }
         }
         if (payouts != null && payouts.totalPending() > 0) {
-            getLogger().severe("PlexonJobs disabled with " + payouts.totalPending() + " minor money units still pending; live-process safety prevented duplicate acknowledgement, but a process crash cannot provide cross-process exactly-once Vault semantics.");
+            getLogger().severe("PlexonJobs disabled with " + payouts.totalPending()
+                    + " minor money units still pending; live-process safety prevented duplicate acknowledgement,"
+                    + " but a process crash cannot provide cross-process exactly-once Vault semantics.");
         }
     }
 
     public synchronized void reloadJobs() {
         if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("PlexonJobs reload must run on the primary thread");
         ConfigLoader.Loaded loaded = new ConfigLoader(this).load();
-        JobsConfig old = runtime.config();
+        JobsConfig oldConfig = runtime.config();
         JobsConfig nextConfig = loaded.config();
-        if (old.moneyScale() != nextConfig.moneyScale() && pendingLedger.totalPending() > 0) {
+        if (oldConfig.moneyScale() != nextConfig.moneyScale() && pendingLedger.totalPending() > 0) {
             throw new IllegalStateException("money-scale cannot change while pending payouts exist");
         }
-        if (!old.resetZone().equals(nextConfig.resetZone()) || old.defaultMoneyCapMinor() != nextConfig.defaultMoneyCapMinor()
-                || old.defaultXpCap() != nextConfig.defaultXpCap()) {
+        if (!oldConfig.resetZone().equals(nextConfig.resetZone())
+                || oldConfig.defaultMoneyCapMinor() != nextConfig.defaultMoneyCapMinor()
+                || oldConfig.defaultXpCap() != nextConfig.defaultXpCap()) {
             throw new IllegalStateException("daily limit/timezone changes require a restart to preserve current-day counters");
-        }
-        if (!old.activity().equals(nextConfig.activity())) {
-            throw new IllegalStateException("activity safety/cache/sampling changes require a restart; reward tables and feedback may be hot-reloaded");
         }
 
         PreparedRuntime next = prepareRuntime(loaded);
-        AutoCloseable nextSubscription = subscribeBlockBreaks(next.registry(), next.router());
-        AutoCloseable previousSubscription = blockSubscription;
-        JobsRuntime previousRuntime = runtime;
-        PayoutService previousPayouts = payouts;
-        ActivityGrantService previousGrants = grants;
-        BlockActivityRouter previousRouter = blockRouter;
-        Messages previousMessages = messages;
+        PreparedRuntime previous = currentPrepared();
+        ActivityListenerCoordinator previousListeners = activityListeners;
 
         try {
             cancelTasks();
             unregisterExpansion();
             unregisterApiService();
+            previousListeners.close();
+
             installPrepared(next);
-            blockSubscription = nextSubscription;
-            closeSubscription(previousSubscription);
+            interest.topologyListener(this::reconcileTopology);
+            activityListeners = new ActivityListenerCoordinator(this);
+            feedback.refreshCache();
+            interest.rebuildOnline();
             registerApiService();
             registerPlaceholderApi();
             scheduleRuntimeTasks();
@@ -189,13 +202,14 @@ public final class PlexonJobs extends JavaPlugin {
             cancelTasks();
             unregisterExpansion();
             unregisterApiService();
-            closeSubscription(nextSubscription);
-            runtime = previousRuntime;
-            payouts = previousPayouts;
-            grants = previousGrants;
-            blockRouter = previousRouter;
-            messages = previousMessages;
-            blockSubscription = subscribeBlockBreaks(previousRuntime.registry(), previousRouter);
+            if (activityListeners != null && activityListeners != previousListeners) {
+                try { activityListeners.close(); } catch (RuntimeException ignored) { }
+            }
+            installPrepared(previous);
+            interest.topologyListener(this::reconcileTopology);
+            activityListeners = new ActivityListenerCoordinator(this);
+            feedback.refreshCache();
+            interest.rebuildOnline();
             registerApiService();
             registerPlaceholderApi();
             scheduleRuntimeTasks();
@@ -206,6 +220,7 @@ public final class PlexonJobs extends JavaPlugin {
 
     private PreparedRuntime prepareRuntime(ConfigLoader.Loaded loaded) {
         JobRegistry registry = new JobRegistry(loaded.definitions());
+        CompiledJobRoutes routes = new CompiledJobRoutes(loaded.definitions());
         JobsConfig config = loaded.config();
         if (!ModuleRegistry.ModuleVersionRange.parse(config.coreApiRange()).contains(core.version())) {
             throw new IllegalStateException("Configured Core range " + config.coreApiRange() + " rejects API " + core.version().apiVersion());
@@ -215,16 +230,25 @@ public final class PlexonJobs extends JavaPlugin {
             dailyPersistence = new DailyLimitPersistence(core, database, limits, getLogger());
         }
         PayoutService nextPayouts = new PayoutService(this, economy, pendingLedger, metrics, config.moneyScale(), config.retryLimit());
-        JobsRuntime nextRuntime = new JobsRuntime(profiles, registry, config, nextPayouts);
-        ActivityGrantService nextGrants = new ActivityGrantService(config, registry, profiles, limits, dailyPersistence,
-                nextPayouts, shadow, metrics);
-        BlockActivityRouter nextRouter = new BlockActivityRouter(registry, nextGrants);
-        return new PreparedRuntime(registry, config, nextPayouts, nextRuntime, nextGrants, nextRouter, loaded.messages());
+        ActivityInterestIndex nextInterest = new ActivityInterestIndex(profiles, dailyPersistence, routes, config.mode());
+        JobsRuntime nextRuntime = new JobsRuntime(profiles, registry, config, nextPayouts, nextInterest);
+        ActivityGrantService nextGrants = new ActivityGrantService(config, registry, routes, nextInterest, profiles,
+                limits, nextPayouts, shadow, metrics, feedback);
+        BlockActivityRouter nextRouter = new BlockActivityRouter(routes, nextInterest, nextGrants, metrics);
+        return new PreparedRuntime(registry, config, routes, nextInterest, nextPayouts, nextRuntime,
+                nextGrants, nextRouter, loaded.messages());
+    }
+
+    private PreparedRuntime currentPrepared() {
+        return new PreparedRuntime(runtime.registry(), runtime.config(), compiledRoutes, interest, payouts,
+                runtime, grants, blockRouter, messages);
     }
 
     private void installPrepared(PreparedRuntime prepared) {
         payouts = prepared.payouts();
         runtime = prepared.runtime();
+        compiledRoutes = prepared.routes();
+        interest = prepared.interest();
         grants = prepared.grants();
         blockRouter = prepared.router();
         messages = prepared.messages();
@@ -232,6 +256,25 @@ public final class PlexonJobs extends JavaPlugin {
 
     private void acceptProfileDefinitions(PreparedRuntime prepared) {
         profiles.acceptKnownJobs(prepared.registry().definitions().stream().map(definition -> definition.id()).toList());
+    }
+
+    private void refreshInterest(UUID playerId) {
+        ActivityInterestIndex live = interest;
+        if (live != null) live.refresh(playerId);
+    }
+
+    private void warmOnlinePlayers() {
+        for (var player : Bukkit.getOnlinePlayers()) {
+            UUID id = player.getUniqueId();
+            profiles.ensure(id);
+            dailyPersistence.ensure(id);
+        }
+    }
+
+    private void reconcileTopology() {
+        if (activityListeners != null) activityListeners.reconcile();
+        if (coreBlockSubscriptions != null) coreBlockSubscriptions.reconcile();
+        if (explorer != null) explorer.reconcile();
     }
 
     private JobsEconomy createEconomy() {
@@ -244,13 +287,6 @@ public final class PlexonJobs extends JavaPlugin {
             getLogger().warning("Vault API could not be linked: " + error.getMessage());
             return new UnavailableJobsEconomy();
         }
-    }
-
-    private AutoCloseable subscribeBlockBreaks(JobRegistry registry, BlockActivityRouter router) {
-        if (registry.breakMaterials().isEmpty()) return null;
-        return core.events().subscribeBlockBreak("plexonjobs",
-                CoreBlockSubscription.builder().materials(registry.breakMaterials()).requiresNaturalOrigin(true).build(),
-                router::handle);
     }
 
     private void registerCommands() {
@@ -295,7 +331,7 @@ public final class PlexonJobs extends JavaPlugin {
         var result = core.modules().register(new ModuleRegistry.ModuleDescriptor(
                 "jobs", "PlexonJobs", getName(), getPluginMeta().getVersion(), this,
                 ModuleRegistry.ModuleVersionRange.parse(runtime.config().coreApiRange()),
-                Set.of("jobs", "economy", "block-break-consumer", "all-jobs", "native-activity", "player-feedback", "shadow-rollout"),
+                Set.of("jobs", "economy", "compiled-activity-routing", "dynamic-listeners", "dynamic-block-subscription", "player-feedback"),
                 moduleState(), moduleDetail(), Instant.now()));
         if (!result.success()) throw new IllegalStateException("Core module registration failed: " + result.message());
     }
@@ -310,9 +346,9 @@ public final class PlexonJobs extends JavaPlugin {
     }
 
     private String moduleDetail() {
-        if (runtime.config().mode() == RuntimeMode.SHADOW) return "SHADOW all-job calculation active; no live XP or Vault deposits";
-        if (runtime.config().mode() == RuntimeMode.PRIMARY && !payouts.economyAvailable()) return "PRIMARY all-job XP active; Vault money provider unavailable";
-        return runtime.config().mode() + " all-job runtime ready";
+        if (runtime.config().mode() == RuntimeMode.SHADOW) return "SHADOW compiled job calculation active; no live XP or Vault deposits";
+        if (runtime.config().mode() == RuntimeMode.PRIMARY && !payouts.economyAvailable()) return "PRIMARY job XP active; Vault money provider unavailable";
+        return runtime.config().mode() + " compiled participation runtime ready";
     }
 
     private void scheduleRuntimeTasks() {
@@ -329,13 +365,8 @@ public final class PlexonJobs extends JavaPlugin {
             dailyPersistence.flushDirty();
             flushShadowAsync();
         }, cfg.saveIntervalTicks(), cfg.saveIntervalTicks()));
-        if (feedback != null) {
-            tasks.add(Bukkit.getScheduler().runTaskTimer(this, feedback::tick, 10L, 10L));
-        }
-        if (explorer != null) {
-            tasks.add(Bukkit.getScheduler().runTaskTimer(this, explorer::sampleOnline,
-                    cfg.activity().explorerSampleTicks(), cfg.activity().explorerSampleTicks()));
-        }
+        tasks.add(Bukkit.getScheduler().runTaskTimer(this, feedback::flush,
+                cfg.performance().feedbackFlushTicks(), cfg.performance().feedbackFlushTicks()));
     }
 
     private void flushShadowAsync() {
@@ -361,32 +392,27 @@ public final class PlexonJobs extends JavaPlugin {
 
     private void awaitShadowWrites() {
         List<CompletableFuture<Void>> inFlight = List.copyOf(shadowWrites);
-        if (inFlight.isEmpty()) return;
-        CompletableFuture.allOf(inFlight.toArray(CompletableFuture[]::new)).join();
+        if (!inFlight.isEmpty()) CompletableFuture.allOf(inFlight.toArray(CompletableFuture[]::new)).join();
     }
 
     private void flushShadowBlocking() {
         var batch = shadow.drain();
         if (batch.isEmpty()) return;
-        try {
-            database.addShadowBatch(shadowDeltas(batch));
-        } catch (RuntimeException failure) {
+        try { database.addShadowBatch(shadowDeltas(batch)); }
+        catch (RuntimeException failure) {
             restoreShadowBatch(batch);
             getLogger().log(Level.SEVERE, "Failed to persist shutdown shadow aggregate batch", failure);
         }
     }
 
     private List<JobsDatabase.ShadowDelta> shadowDeltas(java.util.Map<ShadowLedger.Key, ShadowLedger.Snapshot> batch) {
-        return batch.entrySet().stream()
-                .map(entry -> new JobsDatabase.ShadowDelta(
-                        entry.getKey().playerId(), entry.getKey().jobId(),
-                        entry.getValue().moneyMinor(), entry.getValue().xp(), entry.getValue().events()))
-                .toList();
+        return batch.entrySet().stream().map(entry -> new JobsDatabase.ShadowDelta(
+                entry.getKey().playerId(), entry.getKey().jobId(), entry.getValue().moneyMinor(),
+                entry.getValue().xp(), entry.getValue().events())).toList();
     }
 
     private void restoreShadowBatch(java.util.Map<ShadowLedger.Key, ShadowLedger.Snapshot> batch) {
-        batch.forEach((key, total) -> shadow.addAggregate(
-                key.playerId(), key.jobId(), total.moneyMinor(), total.xp(), total.events()));
+        batch.forEach((key, total) -> shadow.addAggregate(key.playerId(), key.jobId(), total.moneyMinor(), total.xp(), total.events()));
     }
 
     private void cancelTasks() {
@@ -394,21 +420,15 @@ public final class PlexonJobs extends JavaPlugin {
         tasks.clear();
     }
 
-    private void closeBlockSubscription() {
-        closeSubscription(blockSubscription);
-        blockSubscription = null;
-    }
-
-    private void closeSubscription(AutoCloseable subscription) {
-        if (subscription == null) return;
-        try { subscription.close(); }
-        catch (Exception failure) { getLogger().log(Level.WARNING, "Failed to close Core block subscription", failure); }
-    }
-
     public PlexonCoreAPI core() { return core; }
     public JobsDatabase database() { return database; }
     public JobsRuntime runtime() { return runtime; }
     public ActivityGrantService grants() { return grants; }
+    public BlockActivityRouter blockRouter() { return blockRouter; }
+    public CompiledJobRoutes compiledRoutes() { return compiledRoutes; }
+    public ActivityInterestIndex interest() { return interest; }
+    public ActivityListenerCoordinator activityListeners() { return activityListeners; }
+    public CoreBlockSubscriptionCoordinator coreBlockSubscriptions() { return coreBlockSubscriptions; }
     public DailyLimitService limits() { return limits; }
     public DailyLimitPersistence dailyPersistence() { return dailyPersistence; }
     public PayoutService payouts() { return payouts; }
@@ -419,7 +439,7 @@ public final class PlexonJobs extends JavaPlugin {
     public JobsMenuController menus() { return menus; }
     public PlayerFeedbackService feedback() { return feedback; }
 
-    private record PreparedRuntime(JobRegistry registry, JobsConfig config, PayoutService payouts,
-                                   JobsRuntime runtime, ActivityGrantService grants,
-                                   BlockActivityRouter router, Messages messages) {}
+    private record PreparedRuntime(JobRegistry registry, JobsConfig config, CompiledJobRoutes routes,
+                                   ActivityInterestIndex interest, PayoutService payouts, JobsRuntime runtime,
+                                   ActivityGrantService grants, BlockActivityRouter router, Messages messages) { }
 }

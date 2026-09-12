@@ -1,62 +1,84 @@
-# PlexonJobs 2.0.0 stable release gates
+# PlexonJobs 2.5.0 stable release gates
 
-PlexonJobs 2.0.0 uses a GitHub source/CI certification gate for stable publication. Live PlexonCraft deployment validation remains a separate operational follow-up and never rewrites an immutable stable tag.
+PlexonJobs 2.5.0 uses an exact-source GitHub CI gate for stable publication. Live PlexonCraft deployment/profiling is separate; absent real host evidence, release provenance must state `runtime_certification=NOT_EXECUTED`.
 
-## GitHub stable-release gate
+## Stable-only boundary
 
-Stable `v2.0.0` may be published only when all of these are true on the exact final merged `main` commit:
+- version exactly `2.5.0`;
+- no RC/prerelease/snapshot/temp public candidate tag;
+- no RC publisher workflow;
+- branch `release/2.5.0` starts from final `main` at the 2.0.0 stable boundary;
+- rollback tag/source is immutable `v2.0.0` / `985244c61a3c07c70fb48b97ccb2883fb55149b5`;
+- rollback JAR SHA-256 is `686710eed31a6c10e9d78cb7fccc7fdc355330a371a098ba3731940ef048ad0a`.
 
-- previous stable source `72f9225c2d337422d617ff2b5638363eeb98a3cf` (`v1.1.0`) is an ancestor;
-- project version is exactly `2.0.0` with no prerelease suffix;
-- Java 25 / Paper 26.2 / verified PlexonCore 2.0.4 build contract passes;
-- JUnit suite is non-empty with zero failures, errors or skips;
-- Javadoc, `check`, `shadowJar` and distribution verification pass;
-- installable JAR is Java class major 69, contains bundled SQLite, and does not shade PlexonCore, Paper/Bukkit, Adventure, Vault or PlaceholderAPI;
-- all 12 built-in jobs are enabled in the default catalog;
-- Miner/Woodcutter/Digger retain PlexonCore natural-origin block-break authority;
-- non-Core jobs route through the centralized `ActivityGrantService` and native adapters perform no SQL, Vault deposit, YAML parsing or task creation;
-- Hunter unknown/disallowed spawn origins fail closed;
-- Builder repeat-position suppression is bounded;
-- Brewer attribution is bounded and fails closed when unattributed;
-- Explorer uses periodic discovery sampling with no movement-event hot path;
-- reward BossBar feedback is coalesced to reusable per-player state with global cleanup rather than task-per-reward behavior;
-- profile-load retry/backoff, exact profile snapshots, accepted-runtime obsolete-job reconciliation, daily-cap persistence/revision guards, Vault recovery, SHADOW atomicity and shutdown write barriers remain covered;
-- holder-based GUI identity/click-drag routing remains intact;
-- malformed YAML/reload remains fail-closed;
-- no RC publisher exists in the source tree;
-- `.release/RELEASE_NOTES_2.0.0.md` exists;
-- `v2.0.0` does not already exist;
-- `release/stable` points exactly to final current `main`.
+## Exact branch and PR gate
 
-The Release workflow must rebuild/test that exact source, emit JAR/checksum/test/provenance evidence, create normal latest release `v2.0.0`, query the remote GitHub tag to prove it targets the exact source SHA, re-download all four public assets, and verify checksums/evidence before succeeding.
+The final `release/2.5.0` head must pass canonical Build with:
 
-Stable provenance records `release_gate=GITHUB_SOURCE_CI_CERTIFIED` and `runtime_certification=NOT_EXECUTED` unless separate live-host certification has actually been performed.
+- compile, tests, `check`, Javadocs, shaded JAR and distribution verification;
+- Java 25 / class major 69;
+- Paper `26.2.build.121-stable` and verified PlexonCore 2.0.4;
+- non-empty JUnit totals with zero failures/errors/skips;
+- all 12 built-in jobs retained/enabled;
+- `ActivityInterestIndex`, `CompiledJobRoutes`, dynamic listener coordinator and dynamic Core block subscription present;
+- monolithic `NativeActivityListener` absent;
+- typed BREAK route with no `Material.matchMaterial`, profile/daily hydration, SQL, Vault deposit, YAML parse or task creation in the hot path;
+- no gameplay-listener task-per-event scheduling;
+- direct feedback accumulator separated from one global visual flush;
+- public API events retained and activity-event dispatch demand-gated;
+- Explorer `PlayerMoveEvent` absent;
+- Hunter MEMORY path returns before PDC mutation;
+- custom `InventoryHolder`, centralized click/drag routing and Paper Dialog leave confirmation present;
+- no `ChatColor`, `createInventory(null`, inventory-title identity or item display-name/lore action identity;
+- SQLite bundled, while Paper/Bukkit/PlexonCore/Adventure/Vault/PAPI classes are not shaded.
 
-## Previous stable rollback
+After branch Build passes, freeze its exact SHA. The PR body records the frozen SHA, test totals, workflow run ID, branch JAR SHA-256, performance/GUI summary and runtime-certification status. A moved head invalidates the evidence.
 
-- tag: `v1.1.0`
-- source: `72f9225c2d337422d617ff2b5638363eeb98a3cf`
-- JAR: `PlexonJobs-1.1.0.jar`
-- SHA-256: `bbdc7027800029c7588005860befb0f2111cb73352f82aadebce48c3dd594e9f`
+PR CI must pass at that unchanged head before a normal merge commit. Squashing the accepted source lineage is forbidden.
 
-Schema remains version 2. Operational rollback should preserve matching backups of `jobs.db`, YAML configuration, and relevant player/world data because Explorer discoveries use player PDC.
+## Final-main and stable branch gate
 
-## Optional live PlexonCraft verification
+After merge, canonical Build must independently pass on the exact merged `main` SHA.
 
-When deployed to the real host, verify at minimum:
+`release/stable` must then fast-forward, non-force, to that exact final `main`. The stable Release workflow requires `release/stable == main`, proves ancestry from `v2.0.0`, rejects an existing `v2.5.0` tag/release and rebuilds/tests the source again.
 
-- clean startup with Paper 26.2 / Java 25 / PlexonCore 2.0.4 / Vault-Theosis;
-- `/jobs` GUI interaction/transfer safety and all 12 default jobs visible/available;
-- representative successful activity for every job family;
-- Hunter spawner/custom/unknown mob non-reward behavior;
-- Builder same-position repeat suppression;
-- automated/unattributed brewing non-reward behavior;
-- Explorer one-time biome discovery behavior and restart persistence;
-- BossBar XP/money accumulation, progress, expiry, reward sound and level-up title/sound;
-- daily-cap hydration and graceful restart continuity;
-- Vault outage/recovery and payout retry behavior;
-- valid/malformed reload behavior;
-- profile/SHADOW persistence and PlaceholderAPI;
-- representative Spark comparison and multiplayer soak.
+## Stable publication
 
-A proven live defect should be fixed in a later maintenance release rather than moving or rewriting `v2.0.0`.
+The stable workflow creates normal/latest `v2.5.0`, targeted at exact final `main`, with exactly:
+
+- `PlexonJobs-2.5.0.jar`
+- `SHA256SUMS.txt`
+- `TEST_SUMMARY.txt`
+- `PROVENANCE.txt`
+
+It then re-downloads all assets, verifies the JAR checksum and evidence equality, verifies `prerelease=false`, proves the tag target and confirms GitHub's latest release is `v2.5.0`.
+
+## Required provenance claims
+
+Source CI must prove and stable provenance records:
+
+```text
+player_interest_index=PASS
+dynamic_activity_listeners=PASS
+dynamic_core_break_subscription=PASS
+typed_break_route=PASS
+per_event_async_tasks=ABSENT
+per_event_sql=ABSENT
+per_event_vault_deposit=ABSENT
+feedback_coalesced_render=PASS
+custom_event_demand_gate=PASS
+explorer_move_event=ABSENT
+custom_inventory_holder=PASS
+legacy_gui_identity_antipatterns=ABSENT
+cross_process_vault_exactly_once=NOT_CLAIMED
+daily_cap_crash_exactness=NOT_CLAIMED
+runtime_certification=NOT_EXECUTED
+```
+
+Only the last value may differ when factual live-host evidence actually exists.
+
+## Optional live certification
+
+A later real-host certification should validate startup, representative activities for all 12 jobs, no-interest BREAK rejection counters, listener/subscription transitions, Hunter origin safety, Builder/Brewer safeguards, Explorer dynamic sampling, GUI flows/Dialog leave confirmation, BossBar batching, daily persistence, Vault recovery, reload rollback, PlaceholderAPI and comparable spark profiling.
+
+Measured MSPT/allocation improvement must never be claimed from CI alone.

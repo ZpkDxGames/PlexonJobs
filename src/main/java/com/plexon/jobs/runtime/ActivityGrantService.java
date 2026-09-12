@@ -12,81 +12,114 @@ import com.plexon.jobs.model.JobDefinition;
 import com.plexon.jobs.model.JobProgress;
 import com.plexon.jobs.model.PlayerJobsProfile;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 
-import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Authoritative 2.0 reward pipeline shared by Core-owned block activity and native Paper activity listeners.
- * Gameplay callbacks remain memory-only: no SQL, Vault commit, YAML parsing, or task creation occurs here.
+ * Compiled 2.5 reward pipeline. Gameplay callbacks consult pre-hydrated execution state and never
+ * perform SQL, Vault commits, YAML parsing, task creation, or membership reconstruction.
  */
 public final class ActivityGrantService {
     private final JobsConfig config;
     private final JobRegistry registry;
+    private final CompiledJobRoutes routes;
+    private final ActivityInterestIndex interest;
     private final ProfileManager profiles;
     private final DailyLimitService limits;
-    private final DailyLimitPersistence dailyPersistence;
     private final PayoutService payouts;
     private final ShadowLedger shadow;
     private final JobsMetrics metrics;
+    private final RewardFeedbackSink feedback;
 
-    public ActivityGrantService(JobsConfig config, JobRegistry registry, ProfileManager profiles,
-                                DailyLimitService limits, DailyLimitPersistence dailyPersistence,
-                                PayoutService payouts, ShadowLedger shadow, JobsMetrics metrics) {
+    public ActivityGrantService(JobsConfig config, JobRegistry registry, CompiledJobRoutes routes,
+                                ActivityInterestIndex interest, ProfileManager profiles,
+                                DailyLimitService limits, PayoutService payouts, ShadowLedger shadow,
+                                JobsMetrics metrics, RewardFeedbackSink feedback) {
         this.config = Objects.requireNonNull(config);
         this.registry = Objects.requireNonNull(registry);
+        this.routes = Objects.requireNonNull(routes);
+        this.interest = Objects.requireNonNull(interest);
         this.profiles = Objects.requireNonNull(profiles);
         this.limits = Objects.requireNonNull(limits);
-        this.dailyPersistence = Objects.requireNonNull(dailyPersistence);
         this.payouts = Objects.requireNonNull(payouts);
         this.shadow = Objects.requireNonNull(shadow);
         this.metrics = Objects.requireNonNull(metrics);
+        this.feedback = Objects.requireNonNullElse(feedback, RewardFeedbackSink.NOOP);
     }
 
     public Outcome handle(Player player, ActivityType activity, String key, long units, String source) {
-        metrics.callback();
+        metrics.eventSeen();
         if (player == null || units <= 0 || config.mode() == RuntimeMode.DISABLED) {
             metrics.fastReject();
             return Outcome.REJECTED;
         }
-        List<JobDefinition> routes = registry.activityJobs(activity, key);
-        if (routes.isEmpty()) {
-            metrics.fastReject();
+        CompiledJobRoutes.CompiledRoute route = routes.route(activity, key);
+        if (route.jobMask() == 0L) {
+            metrics.rejectedNoGlobalInterest();
             return Outcome.REJECTED;
         }
+        UUID playerId = player.getUniqueId();
+        PlayerExecutionState state = interest.state(playerId);
+        long matched = state.joinedJobMask() & route.jobMask();
+        if (matched == 0L) {
+            metrics.rejectedNoPlayerInterest();
+            return Outcome.REJECTED;
+        }
+        if (!state.rewardReady()) {
+            metrics.rejectedNotReady();
+            return new Outcome(true, false);
+        }
+        return grantRoute(player, activity, route, matched, units, source);
+    }
+
+    /** Specialized typed BREAK path; the caller supplies the already-resolved route/mask. */
+    public Outcome handleBreak(Player player, Material material, CompiledJobRoutes.CompiledRoute route,
+                               long matchedJobMask, long eventId) {
+        if (player == null || route == null || matchedJobMask == 0L) return Outcome.REJECTED;
+        return grantRoute(player, ActivityType.BREAK, route, matchedJobMask, 1L, "core:block:" + eventId);
+    }
+
+    public boolean hasJoinedRoute(UUID playerId, ActivityType activity, String key) {
+        CompiledJobRoutes.CompiledRoute route = routes.route(activity, key);
+        return (interest.state(playerId).joinedJobMask() & route.jobMask()) != 0L;
+    }
+
+    public void originReject() { metrics.rejectedOrigin(); }
+    public void fastReject() { metrics.fastReject(); }
+
+    private Outcome grantRoute(Player player, ActivityType activity, CompiledJobRoutes.CompiledRoute route,
+                               long matchedMask, long units, String source) {
         if (config.disabledWorlds().contains(player.getWorld().getName().toUpperCase(Locale.ROOT))) {
             metrics.fastReject();
-            return Outcome.REJECTED;
+            return new Outcome(true, false);
         }
         if (!config.allowedGameModes().isEmpty() && !config.allowedGameModes().contains(player.getGameMode().name())) {
             metrics.fastReject();
-            return Outcome.REJECTED;
+            return new Outcome(true, false);
         }
 
         UUID playerId = player.getUniqueId();
-        PlayerJobsProfile profile = profiles.ensure(playerId);
-        if (profile.state() != PlayerJobsProfile.State.READY || profile.activeCount() == 0) {
-            metrics.fastReject();
-            return Outcome.REJECTED;
-        }
-        if (config.mode() == RuntimeMode.PRIMARY && !dailyPersistence.ensure(playerId)) {
-            metrics.fastReject();
-            return Outcome.REJECTED;
+        PlayerJobsProfile profile = profiles.get(playerId);
+        if (profile == null || profile.state() != PlayerJobsProfile.State.READY) {
+            metrics.rejectedNotReady();
+            return new Outcome(true, false);
         }
 
-        boolean matchedMembership = false;
         boolean granted = false;
-        for (JobDefinition job : routes) {
+        long remaining = matchedMask;
+        while (remaining != 0L) {
+            int bit = Long.numberOfTrailingZeros(remaining);
+            remaining &= remaining - 1L;
+            JobDefinition job = routes.job(bit);
             JobProgress progress = profile.jobs().get(job.id());
-            if (progress == null || !progress.joined()) continue;
-            matchedMembership = true;
-            ActivityReward base = job.reward(activity, key);
-            ActivityReward reward = scale(base, units);
+            if (progress == null || !progress.joined()) continue; // defensive stale-state guard
+            ActivityReward reward = scale(route.reward(bit), units);
             if (reward.empty()) continue;
-            metrics.eligible();
+            metrics.routeMatch();
             metrics.calculated();
 
             if (config.mode() == RuntimeMode.SHADOW) {
@@ -96,13 +129,22 @@ public final class ActivityGrantService {
                 continue;
             }
 
-            String safeSource = source == null || source.isBlank() ? "native:" + activity.name().toLowerCase(Locale.ROOT) : source;
-            PlexonJobPayoutEvent calculated = new PlexonJobPayoutEvent(playerId, job.id(), activity.name(),
-                    reward.jobXpUnits(), reward.moneyMinorUnits(), safeSource);
-            Bukkit.getPluginManager().callEvent(calculated);
-            if (calculated.isCancelled()) continue;
+            String safeSource = source == null || source.isBlank()
+                    ? "native:" + activity.name().toLowerCase(Locale.ROOT) : source;
+            long xp = reward.jobXpUnits();
+            long money = reward.moneyMinorUnits();
+            if (hasPayoutListeners()) {
+                PlexonJobPayoutEvent calculated = new PlexonJobPayoutEvent(playerId, job.id(), activity.name(), xp, money, safeSource);
+                Bukkit.getPluginManager().callEvent(calculated);
+                metrics.customEventDispatched();
+                if (calculated.isCancelled()) continue;
+                xp = calculated.jobXp();
+                money = calculated.moneyMinor();
+            } else {
+                metrics.customEventSkipped();
+            }
 
-            DailyLimitService.Clamped clamped = limits.clamp(playerId, job.id(), calculated.moneyMinor(), calculated.jobXp());
+            DailyLimitService.Clamped clamped = limits.clamp(playerId, job.id(), money, xp);
             if (clamped.capped()) metrics.capped();
             if (clamped.moneyMinor() <= 0 && clamped.xp() <= 0) continue;
 
@@ -111,41 +153,49 @@ public final class ActivityGrantService {
             if (clamped.xp() > 0) {
                 delta = progress.addXp(clamped.xp(), registry.curve(job.id()));
                 profiles.markDirty(playerId);
-                Bukkit.getPluginManager().callEvent(new PlexonJobXpGainEvent(playerId, job.id(),
-                        clamped.xp(), progress.totalXp(), safeSource));
+                if (hasXpListeners()) {
+                    Bukkit.getPluginManager().callEvent(new PlexonJobXpGainEvent(playerId, job.id(),
+                            clamped.xp(), progress.totalXp(), safeSource));
+                    metrics.customEventDispatched();
+                } else metrics.customEventSkipped();
                 if (delta.leveledUp()) {
-                    Bukkit.getPluginManager().callEvent(new PlexonJobLevelUpEvent(playerId, job.id(),
-                            delta.oldLevel(), delta.newLevel(), delta.totalXp(), safeSource));
+                    feedback.onLevelUp(new RewardFeedbackSink.LevelUpFeedback(playerId, job.id(),
+                            delta.oldLevel(), delta.newLevel(), delta.totalXp()));
+                    if (hasLevelListeners()) {
+                        Bukkit.getPluginManager().callEvent(new PlexonJobLevelUpEvent(playerId, job.id(),
+                                delta.oldLevel(), delta.newLevel(), delta.totalXp(), safeSource));
+                        metrics.customEventDispatched();
+                    } else metrics.customEventSkipped();
                 }
             }
             if (clamped.moneyMinor() > 0) payouts.accrue(playerId, clamped.moneyMinor());
 
-            Bukkit.getPluginManager().callEvent(new PlexonJobRewardGrantedEvent(
-                    playerId, job.id(), activity.name(), clamped.xp(), clamped.moneyMinor(),
-                    progress.totalXp(), progress.level(), registry.curve(job.id()).xpToNextLevel(progress.totalXp()), safeSource));
+            feedback.onReward(new RewardFeedbackSink.RewardFeedback(playerId, job.id(), clamped.xp(),
+                    clamped.moneyMinor(), progress.totalXp(), progress.level()));
+            metrics.feedbackAccumulation();
+            if (hasRewardListeners()) {
+                Bukkit.getPluginManager().callEvent(new PlexonJobRewardGrantedEvent(
+                        playerId, job.id(), activity.name(), clamped.xp(), clamped.moneyMinor(),
+                        progress.totalXp(), progress.level(), registry.curve(job.id()).xpToNextLevel(progress.totalXp()), safeSource));
+                metrics.customEventDispatched();
+            } else metrics.customEventSkipped();
+            metrics.grantCommitted();
             granted = true;
         }
-        return new Outcome(matchedMembership, granted);
+        return new Outcome(true, granted);
     }
 
-    public boolean hasJoinedRoute(UUID playerId, ActivityType activity, String key) {
-        PlayerJobsProfile profile = profiles.get(playerId);
-        if (profile == null || profile.state() != PlayerJobsProfile.State.READY) return false;
-        for (JobDefinition job : registry.activityJobs(activity, key)) {
-            JobProgress progress = profile.jobs().get(job.id());
-            if (progress != null && progress.joined()) return true;
-        }
-        return false;
+    private static boolean hasPayoutListeners() {
+        return PlexonJobPayoutEvent.getHandlerList().getRegisteredListeners().length != 0;
     }
-
-    public void originReject() {
-        metrics.callback();
-        metrics.originReject();
+    private static boolean hasXpListeners() {
+        return PlexonJobXpGainEvent.getHandlerList().getRegisteredListeners().length != 0;
     }
-
-    public void fastReject() {
-        metrics.callback();
-        metrics.fastReject();
+    private static boolean hasLevelListeners() {
+        return PlexonJobLevelUpEvent.getHandlerList().getRegisteredListeners().length != 0;
+    }
+    private static boolean hasRewardListeners() {
+        return PlexonJobRewardGrantedEvent.getHandlerList().getRegisteredListeners().length != 0;
     }
 
     private static ActivityReward scale(ActivityReward base, long units) {

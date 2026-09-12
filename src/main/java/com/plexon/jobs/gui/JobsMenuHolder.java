@@ -9,35 +9,48 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
-/**
- * Stable identity for every PlexonJobs custom inventory. Presentation is never parsed to determine
- * behavior; the holder owns the viewer, view state and slot-to-action map.
- */
+/** Stable identity/state for every PlexonJobs inventory page. Titles and item presentation never control behavior. */
 public final class JobsMenuHolder implements InventoryHolder {
-    public enum View { OVERVIEW, DETAILS, CONFIRM_LEAVE }
-    public enum ActionType { OPEN_JOB, JOIN, LEAVE, CONFIRM_LEAVE, BACK, CLOSE }
+    public enum View { DASHBOARD, BROWSER, PROFILE, DETAILS }
+    public enum Filter { ALL, JOINED, AVAILABLE }
+    public enum ActionType {
+        BROWSE, PROFILE, OPEN_JOB, JOIN, LEAVE, BACK, DASHBOARD,
+        PREVIOUS_PAGE, NEXT_PAGE, FILTER_CYCLE, CLOSE
+    }
 
-    public record MenuAction(ActionType type, String jobId) {
+    public record MenuAction(ActionType type, String jobId, Integer page, Filter filter) {
         public MenuAction {
             Objects.requireNonNull(type, "type");
         }
+        public MenuAction(ActionType type, String jobId) { this(type, jobId, null, null); }
+        public MenuAction(ActionType type, int page, Filter filter) { this(type, null, page, filter); }
     }
 
     private final UUID viewerId;
     private final View view;
     private final String jobId;
+    private final int page;
+    private final Filter filter;
     private final Map<Integer, MenuAction> actions = new HashMap<>();
     private Inventory inventory;
 
     public JobsMenuHolder(UUID viewerId, View view, String jobId) {
+        this(viewerId, view, jobId, 0, Filter.ALL);
+    }
+
+    public JobsMenuHolder(UUID viewerId, View view, String jobId, int page, Filter filter) {
         this.viewerId = Objects.requireNonNull(viewerId, "viewerId");
         this.view = Objects.requireNonNull(view, "view");
         this.jobId = jobId;
+        this.page = Math.max(0, page);
+        this.filter = filter == null ? Filter.ALL : filter;
     }
 
     public UUID viewerId() { return viewerId; }
     public View view() { return view; }
     public String jobId() { return jobId; }
+    public int page() { return page; }
+    public Filter filter() { return filter; }
 
     public void bind(Inventory inventory) {
         if (this.inventory != null) throw new IllegalStateException("Inventory already bound");
@@ -49,13 +62,8 @@ public final class JobsMenuHolder implements InventoryHolder {
         actions.put(slot, Objects.requireNonNull(action, "action"));
     }
 
-    public MenuAction action(int slot) {
-        return actions.get(slot);
-    }
-
-    public Map<Integer, MenuAction> actions() {
-        return Map.copyOf(actions);
-    }
+    public MenuAction action(int slot) { return actions.get(slot); }
+    public Map<Integer, MenuAction> actions() { return Map.copyOf(actions); }
 
     @Override
     public @NotNull Inventory getInventory() {

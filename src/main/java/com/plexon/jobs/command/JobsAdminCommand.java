@@ -48,7 +48,7 @@ public final class JobsAdminCommand implements TabExecutor {
             case "migration" -> migration(sender, args);
             case "simulate" -> simulate(sender, args);
             case "backup" -> sender.sendMessage(Component.text(
-                    "Stop/flush PlexonJobs and copy plugins/PlexonJobs/jobs.db plus YAML configuration. See docs/FULL_RELEASE_2.0.0.md.",
+                    "Stop/flush PlexonJobs and copy plugins/PlexonJobs/jobs.db plus YAML configuration. See docs/RECOVERY.md.",
                     NamedTextColor.YELLOW));
             default -> usage(sender);
         }
@@ -58,27 +58,57 @@ public final class JobsAdminCommand implements TabExecutor {
     private void diagnostics(CommandSender sender) {
         var runtime = plugin.runtime();
         var metrics = plugin.metrics().snapshot();
-        long nativeTypes = Arrays.stream(ActivityType.values()).filter(type -> type != ActivityType.BREAK && runtime.registry().handles(type)).count();
-        sender.sendMessage(Component.text("PlexonJobs diagnostics", NamedTextColor.GOLD));
-        sender.sendMessage(gray("Mode: " + runtime.config().mode() + " | Core: " + plugin.core().version().pluginVersion() + " API " + plugin.core().version().apiVersion()));
-        sender.sendMessage(gray("Jobs: " + runtime.registry().definitions().size() + " | Core break materials: " + runtime.registry().breakMaterials().size() +
-                " | native activity types: " + nativeTypes));
-        sender.sendMessage(gray("Profiles: cached=" + runtime.profiles().onlineCached() + ", loading=" + runtime.profiles().loadingCount() +
-                ", dirty=" + runtime.profiles().dirtyCount() + ", saving=" + runtime.profiles().savingCount()));
-        sender.sendMessage(gray("Daily state: loaded=" + plugin.dailyPersistence().loadedCount() + ", loading=" +
-                plugin.dailyPersistence().loadingCount() + ", saving=" + plugin.dailyPersistence().savingCount() +
-                ", dirty=" + plugin.limits().dirtyPlayers().size()));
-        sender.sendMessage(gray("Economy: available=" + plugin.payouts().economyAvailable() + ", pendingPlayers=" + plugin.payouts().pendingPlayers() +
-                ", pending=" + Money.format(plugin.payouts().totalPending(), runtime.config().moneyScale()) + ", oldestMs=" + plugin.payouts().oldestPendingAgeMillis() +
-                ", retryBlocked=" + plugin.payouts().blockedPlayers()));
-        sender.sendMessage(gray("Payouts: flushes=" + metrics.payoutFlushes() + ", commits=" + metrics.payoutCommits() + ", failed=" + metrics.failedDeposits()));
-        sender.sendMessage(gray("Activities: callbacks=" + metrics.callbacks() + ", fastRejects=" + metrics.fastRejects() + ", originRejects=" + metrics.originRejects() +
-                ", eligible=" + metrics.eligible() + ", capped=" + metrics.capped()));
-        sender.sendMessage(gray("Feedback: enabled=" + runtime.config().feedback().enabled() + ", activeBars=" +
-                (plugin.feedback() == null ? 0 : plugin.feedback().activeBars()) + " | Explorer sampleTicks=" + runtime.config().activity().explorerSampleTicks()));
-        sender.sendMessage(gray("Shadow: moneyMinor=" + metrics.shadowMoneyMinor() + ", xp=" + metrics.shadowXp() + " | shadowBuffer=" + plugin.shadow().size()));
-        sender.sendMessage(gray("Persistence: schema=" + plugin.database().schemaVersion() + " | Core IO queue=" + plugin.core().scheduler().ioQueueSize() + " | day=" + plugin.limits().day()));
+        sender.sendMessage(Component.text("PlexonJobs 2.5 diagnostics", NamedTextColor.GOLD));
+        sender.sendMessage(gray("Mode: " + runtime.config().mode() + " | Core: " + plugin.core().version().pluginVersion()
+                + " API " + plugin.core().version().apiVersion()));
+        sender.sendMessage(gray("Jobs: " + runtime.registry().definitions().size()
+                + " | compiled break materials=" + plugin.compiledRoutes().allBreakMaterials().size()
+                + " | global joined mask=0x" + Long.toHexString(plugin.interest().globalJoinedJobMask())));
+        sender.sendMessage(gray("Profiles: cached=" + runtime.profiles().onlineCached() + ", loading=" + runtime.profiles().loadingCount()
+                + ", dirty=" + runtime.profiles().dirtyCount() + ", saving=" + runtime.profiles().savingCount()));
+        sender.sendMessage(gray("Daily state: loaded=" + plugin.dailyPersistence().loadedCount() + ", loading="
+                + plugin.dailyPersistence().loadingCount() + ", saving=" + plugin.dailyPersistence().savingCount()
+                + ", dirty=" + plugin.limits().dirtyPlayers().size()));
+        sender.sendMessage(gray("Economy: available=" + plugin.payouts().economyAvailable() + ", pendingPlayers=" + plugin.payouts().pendingPlayers()
+                + ", pending=" + Money.format(plugin.payouts().totalPending(), runtime.config().moneyScale()) + ", oldestMs="
+                + plugin.payouts().oldestPendingAgeMillis() + ", retryBlocked=" + plugin.payouts().blockedPlayers()));
+        sender.sendMessage(gray("Payouts: flushes=" + metrics.payoutFlushes() + ", commits=" + metrics.payoutCommits()
+                + ", failed=" + metrics.failedDeposits()));
+        sender.sendMessage(gray("Activity routing: seen=" + metrics.eventsSeen() + ", noGlobal=" + metrics.rejectedNoGlobalInterest()
+                + ", noPlayer=" + metrics.rejectedNoPlayerInterest() + ", notReady=" + metrics.rejectedNotReady()
+                + ", origin=" + metrics.originRejects() + ", matches=" + metrics.routeMatches()
+                + ", grants=" + metrics.grantsCommitted()));
+        sender.sendMessage(gray("Listeners: FARM=" + listener(metrics, ActivityType.FARM)
+                + " KILL=" + listener(metrics, ActivityType.KILL)
+                + " FISH=" + listener(metrics, ActivityType.FISH)
+                + " PLACE=" + listener(metrics, ActivityType.PLACE)
+                + " CRAFT=" + listener(metrics, ActivityType.CRAFT)
+                + " SMELT=" + listener(metrics, ActivityType.SMELT)
+                + " REPAIR=" + listener(metrics, ActivityType.REPAIR)
+                + " BREW=" + listener(metrics, ActivityType.BREW)
+                + " ENCHANT=" + listener(metrics, ActivityType.ENCHANT)));
+        sender.sendMessage(gray("Core block subscription: active=" + (metrics.blockSubscriptionActive() == 1)
+                + " | materials=" + metrics.blockSubscriptionMaterialCount()));
+        sender.sendMessage(gray("Public events: skippedNoListeners=" + metrics.customEventsSkippedNoListeners()
+                + " | dispatched=" + metrics.customEventsDispatched()));
+        sender.sendMessage(gray("Feedback: activeBars=" + (plugin.feedback() == null ? 0 : plugin.feedback().activeBars())
+                + " | accumulations=" + metrics.feedbackAccumulations()
+                + " | visualFlushes=" + metrics.feedbackVisualFlushes()
+                + " | dirtyPlayers=" + metrics.feedbackDirtyPlayers()
+                + " | flushTicks=" + runtime.config().performance().feedbackFlushTicks()));
+        sender.sendMessage(gray("Explorer: participants=" + plugin.interest().participantCount(ActivityType.EXPLORE)
+                + " | taskActive=" + (plugin.interest().participantCount(ActivityType.EXPLORE) > 0)
+                + " | sampleTicks=" + runtime.config().activity().explorerSampleTicks()));
+        sender.sendMessage(gray("Hunter: originTracking=" + runtime.config().activity().hunterOriginTracking()));
+        sender.sendMessage(gray("Shadow: moneyMinor=" + metrics.shadowMoneyMinor() + ", xp=" + metrics.shadowXp()
+                + " | shadowBuffer=" + plugin.shadow().size()));
+        sender.sendMessage(gray("Persistence: schema=" + plugin.database().schemaVersion() + " | Core IO queue="
+                + plugin.core().scheduler().ioQueueSize() + " | day=" + plugin.limits().day()));
         sender.sendMessage(gray("Core gateway routes=" + plugin.core().events().compiledBlockRoutes() + " | metrics=" + plugin.core().events().metrics()));
+    }
+
+    private static int listener(com.plexon.jobs.runtime.JobsMetrics.Snapshot metrics, ActivityType type) {
+        return metrics.listenerActive().getOrDefault(type, 0);
     }
 
     private void migration(CommandSender sender, String[] args) {
@@ -87,7 +117,8 @@ public final class JobsAdminCommand implements TabExecutor {
         switch (action) {
             case "scan" -> {
                 var scan = migration.scan();
-                sender.sendMessage(Component.text("Source: " + scan.sourcePath() + " | exists=" + scan.exists() + " | candidates=" + scan.candidates().size(), NamedTextColor.YELLOW));
+                sender.sendMessage(Component.text("Source: " + scan.sourcePath() + " | exists=" + scan.exists()
+                        + " | candidates=" + scan.candidates().size(), NamedTextColor.YELLOW));
                 scan.candidates().forEach(path -> sender.sendMessage(gray("- " + path)));
             }
             case "plan", "status" -> sender.sendMessage(Component.text(migration.plan(), NamedTextColor.YELLOW));
@@ -129,7 +160,7 @@ public final class JobsAdminCommand implements TabExecutor {
                 return;
             }
             if (activity == ActivityType.DAMAGE) {
-                sender.sendMessage(Component.text("DAMAGE is reserved and not a grantable 2.0 activity.", NamedTextColor.RED));
+                sender.sendMessage(Component.text("DAMAGE is reserved and not a grantable activity.", NamedTextColor.RED));
                 return;
             }
             key = args[3];
@@ -159,9 +190,7 @@ public final class JobsAdminCommand implements TabExecutor {
         }
     }
 
-    private static Component gray(String text) {
-        return Component.text(text, NamedTextColor.GRAY);
-    }
+    private static Component gray(String text) { return Component.text(text, NamedTextColor.GRAY); }
 
     private static boolean usage(CommandSender sender) {
         sender.sendMessage(Component.text("/jobsadmin <diagnostics|reload|payout retry|migration|simulate|backup>", NamedTextColor.YELLOW));
@@ -175,20 +204,16 @@ public final class JobsAdminCommand implements TabExecutor {
         if (args.length == 2 && args[0].equalsIgnoreCase("migration")) return List.of("scan", "plan", "status", "execute");
         if (args.length == 2 && args[0].equalsIgnoreCase("payout")) return List.of("retry");
         if (args.length == 2 && args[0].equalsIgnoreCase("simulate")) return plugin.runtime().registry().definitions().stream().map(d -> d.id()).toList();
-        if (args.length == 3 && args[0].equalsIgnoreCase("simulate")) {
-            return Arrays.stream(ActivityType.values()).filter(type -> type != ActivityType.DAMAGE)
-                    .map(type -> type.name().toLowerCase(Locale.ROOT))
-                    .filter(value -> value.startsWith(args[2].toLowerCase(Locale.ROOT))).toList();
-        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("simulate")) return Arrays.stream(ActivityType.values())
+                .filter(type -> type != ActivityType.DAMAGE).map(type -> type.name().toLowerCase(Locale.ROOT))
+                .filter(value -> value.startsWith(args[2].toLowerCase(Locale.ROOT))).toList();
         if (args.length == 4 && args[0].equalsIgnoreCase("simulate")) {
             var job = plugin.runtime().registry().find(args[1]).orElse(null);
             if (job == null) return List.of();
             try {
                 ActivityType type = ActivityType.valueOf(args[2].toUpperCase(Locale.ROOT));
                 return job.activityKeys(type).stream().sorted().toList();
-            } catch (IllegalArgumentException ignored) {
-                return List.of();
-            }
+            } catch (IllegalArgumentException ignored) { return List.of(); }
         }
         return List.of();
     }

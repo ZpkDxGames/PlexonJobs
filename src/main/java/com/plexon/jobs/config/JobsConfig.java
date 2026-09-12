@@ -21,5 +21,6 @@ public record JobsConfig(
         Set<String> allowedGameModes,
         Set<String> disabledWorlds,
         ActivityConfig activity,
-        FeedbackConfig feedback
+        FeedbackConfig feedback,
+        PerformanceConfig performance
 ) {}
