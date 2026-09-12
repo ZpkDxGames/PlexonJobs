@@ -27,6 +27,7 @@ public final class PlayerFeedbackService implements RewardFeedbackSink {
     private final PlexonJobs plugin;
     private final Map<UUID, FeedbackState> states = new HashMap<>();
     private Map<String, Component> displayNames = Map.of();
+    private int dirtyPlayers;
 
     public PlayerFeedbackService(PlexonJobs plugin) {
         this.plugin = plugin;
@@ -61,8 +62,39 @@ public final class PlayerFeedbackService implements RewardFeedbackSink {
         state.level = reward.level();
         state.expiryNanos = now + config.bossBarDurationTicks() * 50_000_000L;
         state.soundPending |= config.rewardSoundEnabled();
-        state.dirty = true;
-        plugin.metrics().feedbackDirtyPlayers(dirtyCount());
+        if (!state.dirty) {
+            state.dirty = true;
+            dirtyPlayers++;
+            plugin.metrics().feedbackDirtyPlayers(dirtyPlayers);
+        }
+    }
+
+    /** Called by the single plugin-level feedback task. */
+    public void flush() {
+        long now = System.nanoTime();
+        Iterator<Map.Entry<UUID, FeedbackState>> iterator = states.entrySet().iterator();
+        boolean gaugeChanged = false;
+        while (iterator.hasNext()) {
+            Map.Entry<UUID, FeedbackState> entry = iterator.next();
+            FeedbackState state = entry.getValue();
+            Player player = plugin.getServer().getPlayer(entry.getKey());
+            if (player == null || !player.isOnline() || !allowed(player) || now >= state.expiryNanos) {
+                if (player != null && state.bar != null) player.hideBossBar(state.bar);
+                if (state.dirty) {
+                    dirtyPlayers = Math.max(0, dirtyPlayers - 1);
+                    gaugeChanged = true;
+                }
+                iterator.remove();
+                continue;
+            }
+            if (!state.dirty) continue;
+            render(player, state, now);
+            state.dirty = false;
+            dirtyPlayers = Math.max(0, dirtyPlayers - 1);
+            gaugeChanged = true;
+            plugin.metrics().feedbackVisualFlush();
+        }
+        if (gaugeChanged) plugin.metrics().feedbackDirtyPlayers(dirtyPlayers);
     }
 
     @Override
@@ -83,27 +115,6 @@ public final class PlayerFeedbackService implements RewardFeedbackSink {
                     Title.Times.times(Duration.ofMillis(250), Duration.ofMillis(1_500), Duration.ofMillis(400))));
         }
         if (config.levelSoundEnabled()) player.playSound(sound(config.levelSound(), config.levelVolume(), config.levelPitch()));
-    }
-
-    /** Called by the single plugin-level feedback task. */
-    public void flush() {
-        long now = System.nanoTime();
-        Iterator<Map.Entry<UUID, FeedbackState>> iterator = states.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<UUID, FeedbackState> entry = iterator.next();
-            FeedbackState state = entry.getValue();
-            Player player = plugin.getServer().getPlayer(entry.getKey());
-            if (player == null || !player.isOnline() || !allowed(player) || now >= state.expiryNanos) {
-                if (player != null && state.bar != null) player.hideBossBar(state.bar);
-                iterator.remove();
-                continue;
-            }
-            if (!state.dirty) continue;
-            render(player, state, now);
-            state.dirty = false;
-            plugin.metrics().feedbackVisualFlush();
-        }
-        plugin.metrics().feedbackDirtyPlayers(dirtyCount());
     }
 
     private void render(Player player, FeedbackState state, long now) {
@@ -142,16 +153,11 @@ public final class PlayerFeedbackService implements RewardFeedbackSink {
             if (player != null && state.bar != null) player.hideBossBar(state.bar);
         });
         states.clear();
+        dirtyPlayers = 0;
         plugin.metrics().feedbackDirtyPlayers(0);
     }
 
     public int activeBars() { return states.size(); }
-
-    private int dirtyCount() {
-        int count = 0;
-        for (FeedbackState state : states.values()) if (state.dirty) count++;
-        return count;
-    }
 
     private boolean allowed(Player player) {
         return player != null && player.isOnline() && plugin.runtime() != null
