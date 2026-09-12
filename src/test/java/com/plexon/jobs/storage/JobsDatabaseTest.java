@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -29,6 +30,29 @@ class JobsDatabaseTest {
         }
         IllegalStateException failure = assertThrows(IllegalStateException.class, database::initialize);
         assertTrue(failure.getMessage().contains("newer than supported"));
+    }
+
+    @Test void dailySnapshotsSurviveRestartAndOverwriteAbsolutely() {
+        Path path = temp.resolve("daily.db");
+        UUID id = UUID.randomUUID();
+        long dayId = 20_000L;
+        JobsDatabase first = new JobsDatabase(path);
+        first.initialize();
+        first.saveDaily(id, dayId, Map.of(
+                "miner", new JobsDatabase.DailyRow(125, 25),
+                "digger", new JobsDatabase.DailyRow(40, 9)));
+        // A retry/newer snapshot must replace the absolute values, not add them again.
+        first.saveDaily(id, dayId, Map.of(
+                "miner", new JobsDatabase.DailyRow(150, 30),
+                "digger", new JobsDatabase.DailyRow(40, 9)));
+
+        JobsDatabase reopened = new JobsDatabase(path);
+        reopened.initialize();
+        Map<String, JobsDatabase.DailyRow> restored = reopened.loadDaily(id, dayId);
+        assertEquals(new JobsDatabase.DailyRow(150, 30), restored.get("miner"));
+        assertEquals(new JobsDatabase.DailyRow(40, 9), restored.get("digger"));
+        assertEquals(2, restored.size());
+        assertTrue(reopened.loadDaily(id, dayId + 1).isEmpty());
     }
 
     @Test void shadowBatchPreservesExactEventCount() {
