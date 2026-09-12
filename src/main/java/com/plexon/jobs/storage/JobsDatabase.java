@@ -10,7 +10,9 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -150,6 +152,58 @@ public final class JobsDatabase {
         }
     }
 
+    public Map<String, DailyRow> loadDaily(UUID playerId, long dayId) {
+        Map<String, DailyRow> rows = new LinkedHashMap<>();
+        try (Connection connection = open(); PreparedStatement ps = connection.prepareStatement(
+                "SELECT job_id,money_units,xp_units FROM daily_earnings WHERE player_uuid=? AND day_id=? ORDER BY job_id")) {
+            ps.setString(1, playerId.toString());
+            ps.setLong(2, dayId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) rows.put(rs.getString(1), new DailyRow(rs.getLong(2), rs.getLong(3)));
+            }
+            return Map.copyOf(rows);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to load daily earnings for " + playerId + " / " + dayId, ex);
+        }
+    }
+
+    /** Writes absolute same-day counters; retries cannot double an already persisted snapshot. */
+    public void saveDaily(UUID playerId, long dayId, Map<String, DailyRow> rows) {
+        Objects.requireNonNull(playerId, "playerId");
+        Objects.requireNonNull(rows, "rows");
+        if (rows.isEmpty()) return;
+        String sql = """
+                INSERT INTO daily_earnings(player_uuid,job_id,day_id,money_units,xp_units)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(player_uuid,job_id,day_id) DO UPDATE SET
+                  money_units=excluded.money_units,
+                  xp_units=excluded.xp_units
+                """;
+        try (Connection connection = open()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                for (Map.Entry<String, DailyRow> entry : rows.entrySet()) {
+                    DailyRow row = Objects.requireNonNull(entry.getValue(), "daily row");
+                    ps.setString(1, playerId.toString());
+                    ps.setString(2, Objects.requireNonNull(entry.getKey(), "jobId"));
+                    ps.setLong(3, dayId);
+                    ps.setLong(4, Math.max(0, row.moneyMinor()));
+                    ps.setLong(5, Math.max(0, row.xp()));
+                    ps.addBatch();
+                }
+                ps.executeBatch();
+                connection.commit();
+            } catch (Exception ex) {
+                connection.rollback();
+                throw ex;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to save daily earnings for " + playerId + " / " + dayId, ex);
+        }
+    }
+
     public void addShadow(UUID playerId, String jobId, long moneyMinor, long xp, long eventCount) {
         addShadowBatch(List.of(new ShadowDelta(playerId, jobId, moneyMinor, xp, eventCount)));
     }
@@ -232,6 +286,7 @@ public final class JobsDatabase {
         return DriverManager.getConnection("jdbc:sqlite:" + dbPath.toAbsolutePath());
     }
 
+    public record DailyRow(long moneyMinor, long xp) {}
     public record ShadowDelta(UUID playerId, String jobId, long moneyMinor, long xp, long eventCount) {}
     public record ShadowRow(long moneyMinor, long xp, long events) {}
 }
