@@ -12,20 +12,23 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Locale;
+import java.util.Objects;
 
 public final class PlexonJobsExpansion extends PlaceholderExpansion {
     private static final String[] JOB_FIELDS = {"earned_today", "xp_next", "progress", "joined", "level", "xp"};
     private final JobsRuntime runtime;
     private final DailyLimitService limits;
+    private final String pluginVersion;
 
-    public PlexonJobsExpansion(JobsRuntime runtime, DailyLimitService limits) {
-        this.runtime = runtime;
-        this.limits = limits;
+    public PlexonJobsExpansion(JobsRuntime runtime, DailyLimitService limits, String pluginVersion) {
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this.limits = Objects.requireNonNull(limits, "limits");
+        this.pluginVersion = Objects.requireNonNull(pluginVersion, "pluginVersion");
     }
 
     @Override public @NotNull String getIdentifier() { return "plexonjobs"; }
     @Override public @NotNull String getAuthor() { return "ZpkDxGames"; }
-    @Override public @NotNull String getVersion() { return "1.0.0"; }
+    @Override public @NotNull String getVersion() { return pluginVersion; }
     @Override public boolean persist() { return true; }
 
     @Override
