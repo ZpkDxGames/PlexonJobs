@@ -62,45 +62,146 @@ jobs:
   farmer:
     display-name: "<green>Farmer</green>"
     icon: WHEAT
-    enabled: false
+    enabled: true
     max-level: 200
+    farm:
+      WHEAT: { money: 0.08, xp: 2 }
+      CARROTS: { money: 0.08, xp: 2 }
+      POTATOES: { money: 0.08, xp: 2 }
+      BEETROOTS: { money: 0.10, xp: 2 }
+      NETHER_WART: { money: 0.12, xp: 3 }
+      COCOA: { money: 0.10, xp: 2 }
+      SWEET_BERRY_BUSH: { money: 0.08, xp: 2 }
+      CAVE_VINES: { money: 0.10, xp: 2 }
+      CAVE_VINES_PLANT: { money: 0.10, xp: 2 }
+
   hunter:
     display-name: "<red>Hunter</red>"
     icon: IRON_SWORD
-    enabled: false
+    enabled: true
     max-level: 200
+    kill:
+      ZOMBIE: { money: 0.30, xp: 4 }
+      HUSK: { money: 0.35, xp: 4 }
+      DROWNED: { money: 0.40, xp: 5 }
+      SKELETON: { money: 0.35, xp: 4 }
+      STRAY: { money: 0.45, xp: 5 }
+      BOGGED: { money: 0.50, xp: 6 }
+      SPIDER: { money: 0.25, xp: 3 }
+      CAVE_SPIDER: { money: 0.35, xp: 4 }
+      CREEPER: { money: 0.45, xp: 6 }
+      PHANTOM: { money: 0.60, xp: 6 }
+      ENDERMAN: { money: 1.00, xp: 10 }
+      BLAZE: { money: 0.90, xp: 9 }
+      WITHER_SKELETON: { money: 1.50, xp: 14 }
+      WITCH: { money: 1.00, xp: 10 }
+      GUARDIAN: { money: 0.80, xp: 8 }
+      PILLAGER: { money: 0.60, xp: 7 }
+      VINDICATOR: { money: 0.75, xp: 8 }
+      EVOKER: { money: 2.50, xp: 20 }
+      RAVAGER: { money: 4.00, xp: 35 }
+      BREEZE: { money: 1.25, xp: 12 }
+
   fisher:
     display-name: "<aqua>Fisher</aqua>"
     icon: FISHING_ROD
-    enabled: false
+    enabled: true
     max-level: 200
+    fish:
+      COD: { money: 0.20, xp: 3 }
+      SALMON: { money: 0.25, xp: 3 }
+      TROPICAL_FISH: { money: 0.35, xp: 5 }
+      PUFFERFISH: { money: 0.35, xp: 5 }
+      BOW: { money: 0.80, xp: 8 }
+      FISHING_ROD: { money: 0.80, xp: 8 }
+      ENCHANTED_BOOK: { money: 2.00, xp: 18 }
+      NAME_TAG: { money: 1.50, xp: 14 }
+      NAUTILUS_SHELL: { money: 2.50, xp: 20 }
+      SADDLE: { money: 1.25, xp: 12 }
+      "*": { money: 0.10, xp: 1 }
+
   builder:
     display-name: "<gold>Builder</gold>"
     icon: BRICKS
-    enabled: false
+    enabled: true
     max-level: 200
+    place:
+      BRICKS: { money: 0.04, xp: 1 }
+      STONE_BRICKS: { money: 0.03, xp: 1 }
+      DEEPSLATE_BRICKS: { money: 0.04, xp: 1 }
+      POLISHED_DEEPSLATE: { money: 0.04, xp: 1 }
+      OAK_PLANKS: { money: 0.02, xp: 1 }
+      SPRUCE_PLANKS: { money: 0.02, xp: 1 }
+      BIRCH_PLANKS: { money: 0.02, xp: 1 }
+      JUNGLE_PLANKS: { money: 0.02, xp: 1 }
+      ACACIA_PLANKS: { money: 0.02, xp: 1 }
+      DARK_OAK_PLANKS: { money: 0.02, xp: 1 }
+      MANGROVE_PLANKS: { money: 0.02, xp: 1 }
+      CHERRY_PLANKS: { money: 0.02, xp: 1 }
+      GLASS: { money: 0.03, xp: 1 }
+      TERRACOTTA: { money: 0.03, xp: 1 }
+      WHITE_CONCRETE: { money: 0.03, xp: 1 }
+      BLACK_CONCRETE: { money: 0.03, xp: 1 }
+      QUARTZ_BLOCK: { money: 0.05, xp: 2 }
+      PRISMARINE_BRICKS: { money: 0.05, xp: 2 }
+      END_STONE_BRICKS: { money: 0.05, xp: 2 }
+
   crafter:
     display-name: "<yellow>Crafter</yellow>"
     icon: CRAFTING_TABLE
-    enabled: false
+    enabled: true
     max-level: 200
+    craft:
+      CRAFTING_TABLE: { money: 0.08, xp: 2 }
+      CHEST: { money: 0.08, xp: 2 }
+      BARREL: { money: 0.10, xp: 2 }
+      HOPPER: { money: 0.30, xp: 5 }
+      PISTON: { money: 0.20, xp: 4 }
+      STICKY_PISTON: { money: 0.25, xp: 5 }
+      OBSERVER: { money: 0.25, xp: 5 }
+      COMPARATOR: { money: 0.25, xp: 5 }
+      REPEATER: { money: 0.20, xp: 4 }
+      DISPENSER: { money: 0.25, xp: 5 }
+      DROPPER: { money: 0.18, xp: 4 }
+      ENCHANTING_TABLE: { money: 1.50, xp: 16 }
+      ANVIL: { money: 1.00, xp: 12 }
+      BEACON: { money: 4.00, xp: 40 }
+
   blacksmith:
     display-name: "<gray>Blacksmith</gray>"
     icon: ANVIL
-    enabled: false
+    enabled: true
     max-level: 200
+    smelt:
+      IRON_INGOT: { money: 0.08, xp: 2 }
+      GOLD_INGOT: { money: 0.10, xp: 2 }
+      COPPER_INGOT: { money: 0.06, xp: 1 }
+      NETHERITE_SCRAP: { money: 0.60, xp: 8 }
+      GLASS: { money: 0.03, xp: 1 }
+      BRICK: { money: 0.03, xp: 1 }
+    repair:
+      "*": { money: 0.00, xp: 1 }
+
   brewer:
     display-name: "<light_purple>Brewer</light_purple>"
     icon: BREWING_STAND
-    enabled: false
+    enabled: true
     max-level: 200
+    brew:
+      "*": { money: 0.08, xp: 2 }
+
   enchanter:
     display-name: "<dark_purple>Enchanter</dark_purple>"
     icon: ENCHANTING_TABLE
-    enabled: false
+    enabled: true
     max-level: 200
+    enchant:
+      "*": { money: 0.02, xp: 1 }
+
   explorer:
     display-name: "<blue>Explorer</blue>"
     icon: COMPASS
-    enabled: false
+    enabled: true
     max-level: 200
+    explore:
+      "*": { money: 3.00, xp: 40 }
