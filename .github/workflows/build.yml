@@ -48,7 +48,7 @@ jobs:
           curl --fail --location --retry 3 --silent --show-error --output "$core_jar" \
             "https://github.com/ZpkDxGames/PlexonCore/releases/download/v${CORE_VERSION}/PlexonCore-${CORE_VERSION}.jar"
           echo "${CORE_SHA256}  ${core_jar}" | sha256sum --check
-          mvn -B -ntp org.apache.maven.plugins/maven-install-plugin:3.1.4:install-file \
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
             -Dfile="$core_jar" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
             -Dversion="$CORE_VERSION" -Dpackaging=jar -DgeneratePom=true
 
