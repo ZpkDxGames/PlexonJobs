@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.0.0 — Complete jobs and dynamic player feedback
+
+### All built-in jobs
+- Enables all 12 built-in job families: Miner, Woodcutter, Digger, Farmer, Hunter, Fisher, Builder, Crafter, Blacksmith, Brewer, Enchanter and Explorer.
+- Preserves PlexonCore as the authoritative high-frequency natural block-break gateway for Miner/Woodcutter/Digger.
+- Adds narrow Paper activity adapters for activity types not currently exposed by PlexonCore.
+- Generalizes job definitions to indexed activity/key reward maps with exact keys plus optional `*` fallback.
+- Routes every activity through one `ActivityGrantService`, keeping runtime mode, profile readiness, daily caps, XP/level events, payouts, metrics and SHADOW semantics consistent.
+
+### Native activity safety
+- Farmer rewards mature crops and supported harvest-without-breaking actions.
+- Hunter records creature spawn provenance in PDC and fails closed for unknown/disallowed origins; spawner/egg/breeding/command/plugin-custom origins are excluded by default.
+- Fisher rewards successful catch results.
+- Builder uses a bounded per-player TTL cache to suppress rapid same-position placement farming.
+- Crafter consumes Paper post-craft result events.
+- Blacksmith rewards furnace extraction, smithing result collection and Mending repairs.
+- Brewer attributes completed batches only to recent player interaction with the brewing stand.
+- Enchanter rewards successful enchant operations.
+- Explorer samples biome/environment discovery periodically, persists discoveries in player PDC and avoids a movement-event hot path.
+
+### Dynamic feedback
+- Adds configurable, permission-aware reward BossBars with coalesced XP/money deltas and current level progress.
+- Reuses one mutable BossBar per active player; no timer/task is created per reward.
+- Adds throttled reward sounds.
+- Adds configurable level-up title/subtitle and level-up sound.
+- Adds `PlexonJobRewardGrantedEvent` as the post-authoritative-grant presentation/integration event.
+- Adds `plexonjobs.feedback`, enabled by default.
+- Existing `messages.yml` files inherit embedded defaults for new feedback templates.
+
+### Admin / diagnostics
+- `/jobsadmin diagnostics` reports native activity type count and active feedback bars.
+- `/jobsadmin simulate <job> <activity> <key> <count>` can simulate any configured 2.0 reward without granting state.
+- The 1.1 `/jobsadmin simulate <job> <material> <count>` block-break form remains as a compatibility shortcut.
+
+### Preserved correctness contracts
+- Gameplay activity callbacks perform no SQL, Vault deposit, YAML parsing or task creation.
+- Profile-load retry/backoff, exact transactional profile snapshots, accepted-runtime job reconciliation, daily snapshot revision guards, SHADOW atomicity and graceful shutdown write barriers remain intact.
+- Vault provider discovery remains recoverable during coalesced payout flushing.
+- Activity safety/cache/sampling settings are restart-only; reward tables/messages/feedback presentation remain fail-closed reloadable.
+- Cross-process exactly-once Vault payout semantics remain explicitly **not claimed**.
+- Daily-cap abrupt-crash exactness remains explicitly **not claimed**.
+
+### Stable release boundary
+- Version is stable `2.0.0`; no prerelease version or RC publisher is used.
+- Stable rollback is `v1.1.0`, source `72f9225c2d337422d617ff2b5638363eeb98a3cf`, JAR SHA-256 `bbdc7027800029c7588005860befb0f2111cb73352f82aadebce48c3dd594e9f`.
+- Exact merged-main CI and the stable publisher must both rebuild/test/verify the 2.0 source before `v2.0.0` publication.
+
 ## 1.1.0 — Stable full revamp
 
 ### Player product / UX
@@ -8,8 +55,7 @@
 - Centralizes click/drag routing, blocks unsafe transfer paths and defers inventory transitions caused by clicks.
 - Makes the GUI the primary join/leave discovery surface while preserving direct command fallbacks.
 - Requires explicit confirmation before leave/leaveall actions that would reset progression.
-- Keeps all configured job families discoverable; unsupported families explain that they remain unavailable until PlexonCore exposes an authoritative activity context.
-- Removes the non-functional `/jobs top` branch.
+- Keeps all configured job families discoverable and removes the non-functional `/jobs top` branch.
 
 ### Messages / integration
 - Activates `messages.yml` as the configurable Adventure/MiniMessage surface.
@@ -34,53 +80,14 @@
 ### Verification / release discipline
 - Stable version is `1.1.0`; no RC publisher remains in the source tree.
 - Branch/PR CI proves ancestry from stable `v1.0.0`, provisions verified PlexonCore 2.0.4, runs tests/build/Javadocs/distribution verification and emits exact provenance artifacts.
-- CI enforces holder-based GUI identity, daily persistence, exact profile snapshots, obsolete-job reconciliation, profile retry/backoff, Vault provider recovery and public XP input guards.
 - The stable publisher accepts only `1.1.0`, only when `release/stable` points exactly at merged `main`, and verifies the remote stable tag plus public JAR/checksum/test/provenance assets.
-- Previous stable rollback remains `v1.0.0`, source `24b8e61950cb3a01112351e19c733d9a80953a03`, JAR SHA-256 `f6adfa64e60f195e9528be37c5e91e8938453a3c6635b5b2a5ba75a102cdeaa0`.
-
-### Preserved boundaries
-- Miner, Woodcutter and Digger remain the only enabled job families because they have authoritative Core natural-origin block context.
-- No duplicate/fallback high-frequency Bukkit work engine was added for unsupported job families.
-- Vault/TheosisEconomy remains the external balance authority; cross-process exactly-once Vault payout semantics remain explicitly **not claimed**.
-- Daily-cap abrupt-crash exactness remains **not claimed** because snapshots are coalesced rather than synchronously journaled per reward.
-- Jobs Reborn migration execute remains fail-closed until the real source schema is inspected and rehearsed with backup.
 
 ## 1.0.0 — Stable
 
-### Product
 - PlexonCore-native job membership, progression, fixed-unit payout accrual, GUI/admin commands, public API/events and PlaceholderAPI integration.
 - Miner, Woodcutter and Digger use the authoritative Core natural-origin block-break gateway.
-- Job families without authoritative shared contexts remain disabled instead of registering duplicate high-frequency listeners.
 - SHADOW / PRIMARY / DISABLED runtime modes, bounded non-granting simulation and fail-closed legacy migration tooling.
-
-### Stable source fixes
 - Final profile shutdown persistence waits for older asynchronous saves before writing the authoritative snapshot.
 - SHADOW aggregate batches persist atomically in one SQLite transaction.
-- Graceful shutdown waits for already-running SHADOW persistence before final blocking flush.
 - `config.yml` and `jobs.yml` are strictly parsed before reload can mutate/compile the next runtime.
-
-### Preserved limits
-- Vault/TheosisEconomy remains the external balance authority.
-- Cross-process exactly-once Vault payout semantics are explicitly **not claimed**.
-- Daily cap state in 1.0.0 was an in-memory active-process/day contract; 1.1.0 supersedes it with persisted graceful-restart snapshots.
-- Jobs Reborn migration execution remains fail-closed until an actual source schema is inspected and rehearsed with backup.
-
-### Release boundary
-- Accepted RC2 source: `4929145d2e594fef5714319b8f668076fc66498a`.
 - Final stable `v1.0.0` source: `24b8e61950cb3a01112351e19c733d9a80953a03`.
-- Stable GitHub publication is exact-current-main gated and verifies downloaded public JAR/checksum/test/provenance assets.
-
-## 1.0.0 candidate history
-
-- Bootstrapped Java 25 / Paper 26.2 Core-native plugin.
-- Added API 2.x Core module registration and shared block-break subscriptions.
-- Added configuration-driven job registry with all required built-in job IDs.
-- Implemented Miner, Woodcutter and Digger on Core natural-origin facts.
-- Added in-memory membership, total job XP, levels and daily counters.
-- Added fixed-minor-unit reward math, coalesced pending Vault ledger and bounded commits.
-- Added SQLite WAL persistence with coalesced saves.
-- Added public API and domain events.
-- Added `/jobs`, `/jobsadmin`, GUI browsing and PlaceholderAPI integration.
-- Added SHADOW/PRIMARY/DISABLED runtime modes.
-- Added migration scan/plan safety shell without guessing proprietary legacy schemas.
-- Added diagnostics and distribution verification.
