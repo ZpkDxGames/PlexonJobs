@@ -20,6 +20,7 @@ import com.plexon.jobs.runtime.DailyLimitService;
 import com.plexon.jobs.runtime.JobRegistry;
 import com.plexon.jobs.runtime.JobsMetrics;
 import com.plexon.jobs.runtime.JobsRuntime;
+import com.plexon.jobs.runtime.PlayerStateListener;
 import com.plexon.jobs.runtime.ProfileManager;
 import com.plexon.jobs.runtime.RuntimeMode;
 import com.plexon.jobs.runtime.ShadowLedger;
@@ -96,6 +97,7 @@ public final class PlexonJobs extends JavaPlugin {
             registerApiService();
             menus = new JobsMenuController(this);
             Bukkit.getPluginManager().registerEvents(menus, this);
+            Bukkit.getPluginManager().registerEvents(new PlayerStateListener(profiles, dailyPersistence), this);
             registerCommands();
             registerModule();
             registerPlaceholderApi();
@@ -253,7 +255,7 @@ public final class PlexonJobs extends JavaPlugin {
     private void registerPlaceholderApi() {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) return;
         try {
-            expansion = new PlexonJobsExpansion(runtime, limits, getPluginMeta().getVersion());
+            expansion = new PlexonJobsExpansion(runtime, limits, dailyPersistence, getPluginMeta().getVersion());
             if (!expansion.register()) {
                 getLogger().warning("PlaceholderAPI rejected the PlexonJobs expansion registration.");
                 expansion = null;
