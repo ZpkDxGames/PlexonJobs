@@ -2,6 +2,7 @@ package com.plexon.jobs.command;
 
 import com.plexon.jobs.PlexonJobs;
 import com.plexon.jobs.migration.LegacyJobsMigration;
+import com.plexon.jobs.model.ActivityType;
 import com.plexon.jobs.util.Money;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -10,6 +11,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -46,7 +48,7 @@ public final class JobsAdminCommand implements TabExecutor {
             case "migration" -> migration(sender, args);
             case "simulate" -> simulate(sender, args);
             case "backup" -> sender.sendMessage(Component.text(
-                    "Stop/flush PlexonJobs and copy plugins/PlexonJobs/jobs.db plus YAML configuration. See docs/FULL_REVAMP_1.1.0.md.",
+                    "Stop/flush PlexonJobs and copy plugins/PlexonJobs/jobs.db plus YAML configuration. See docs/FULL_RELEASE_2.0.0.md.",
                     NamedTextColor.YELLOW));
             default -> usage(sender);
         }
@@ -56,9 +58,11 @@ public final class JobsAdminCommand implements TabExecutor {
     private void diagnostics(CommandSender sender) {
         var runtime = plugin.runtime();
         var metrics = plugin.metrics().snapshot();
+        long nativeTypes = Arrays.stream(ActivityType.values()).filter(type -> type != ActivityType.BREAK && runtime.registry().handles(type)).count();
         sender.sendMessage(Component.text("PlexonJobs diagnostics", NamedTextColor.GOLD));
         sender.sendMessage(gray("Mode: " + runtime.config().mode() + " | Core: " + plugin.core().version().pluginVersion() + " API " + plugin.core().version().apiVersion()));
-        sender.sendMessage(gray("Jobs: " + runtime.registry().definitions().size() + " | Core break materials: " + runtime.registry().breakMaterials().size()));
+        sender.sendMessage(gray("Jobs: " + runtime.registry().definitions().size() + " | Core break materials: " + runtime.registry().breakMaterials().size() +
+                " | native activity types: " + nativeTypes));
         sender.sendMessage(gray("Profiles: cached=" + runtime.profiles().onlineCached() + ", loading=" + runtime.profiles().loadingCount() +
                 ", dirty=" + runtime.profiles().dirtyCount() + ", saving=" + runtime.profiles().savingCount()));
         sender.sendMessage(gray("Daily state: loaded=" + plugin.dailyPersistence().loadedCount() + ", loading=" +
@@ -70,6 +74,8 @@ public final class JobsAdminCommand implements TabExecutor {
         sender.sendMessage(gray("Payouts: flushes=" + metrics.payoutFlushes() + ", commits=" + metrics.payoutCommits() + ", failed=" + metrics.failedDeposits()));
         sender.sendMessage(gray("Activities: callbacks=" + metrics.callbacks() + ", fastRejects=" + metrics.fastRejects() + ", originRejects=" + metrics.originRejects() +
                 ", eligible=" + metrics.eligible() + ", capped=" + metrics.capped()));
+        sender.sendMessage(gray("Feedback: enabled=" + runtime.config().feedback().enabled() + ", activeBars=" +
+                (plugin.feedback() == null ? 0 : plugin.feedback().activeBars()) + " | Explorer sampleTicks=" + runtime.config().activity().explorerSampleTicks()));
         sender.sendMessage(gray("Shadow: moneyMinor=" + metrics.shadowMoneyMinor() + ", xp=" + metrics.shadowXp() + " | shadowBuffer=" + plugin.shadow().size()));
         sender.sendMessage(gray("Persistence: schema=" + plugin.database().schemaVersion() + " | Core IO queue=" + plugin.core().scheduler().ioQueueSize() + " | day=" + plugin.limits().day()));
         sender.sendMessage(gray("Core gateway routes=" + plugin.core().events().compiledBlockRoutes() + " | metrics=" + plugin.core().events().metrics()));
@@ -94,17 +100,44 @@ public final class JobsAdminCommand implements TabExecutor {
 
     private void simulate(CommandSender sender, String[] args) {
         if (args.length < 4) {
-            sender.sendMessage(Component.text("/jobsadmin simulate <job> <material> <count>", NamedTextColor.YELLOW));
+            sender.sendMessage(Component.text("/jobsadmin simulate <job> <activity> <key> <count>", NamedTextColor.YELLOW));
+            sender.sendMessage(Component.text("Legacy shortcut: /jobsadmin simulate <job> <material> <count>", NamedTextColor.GRAY));
             return;
         }
         var job = plugin.runtime().registry().find(args[1]).orElse(null);
-        Material material = Material.matchMaterial(args[2]);
-        if (job == null || material == null) {
-            sender.sendMessage(Component.text("Unknown job or material.", NamedTextColor.RED));
+        if (job == null) {
+            sender.sendMessage(Component.text("Unknown job.", NamedTextColor.RED));
             return;
         }
+
+        ActivityType activity;
+        String key;
+        String rawCount;
+        if (args.length == 4) {
+            activity = ActivityType.BREAK;
+            Material material = Material.matchMaterial(args[2]);
+            if (material == null) {
+                sender.sendMessage(Component.text("Unknown material.", NamedTextColor.RED));
+                return;
+            }
+            key = material.name();
+            rawCount = args[3];
+        } else {
+            try { activity = ActivityType.valueOf(args[2].toUpperCase(Locale.ROOT)); }
+            catch (IllegalArgumentException ex) {
+                sender.sendMessage(Component.text("Unknown activity. Use BREAK, PLACE, KILL, FISH, FARM, CRAFT, SMELT, BREW, ENCHANT, REPAIR, or EXPLORE.", NamedTextColor.RED));
+                return;
+            }
+            if (activity == ActivityType.DAMAGE) {
+                sender.sendMessage(Component.text("DAMAGE is reserved and not a grantable 2.0 activity.", NamedTextColor.RED));
+                return;
+            }
+            key = args[3];
+            rawCount = args[4];
+        }
+
         long count;
-        try { count = Long.parseLong(args[3]); }
+        try { count = Long.parseLong(rawCount); }
         catch (NumberFormatException ex) {
             sender.sendMessage(Component.text("Count must be an integer.", NamedTextColor.RED));
             return;
@@ -113,11 +146,12 @@ public final class JobsAdminCommand implements TabExecutor {
             sender.sendMessage(Component.text("Count must be between 0 and " + MAX_SIMULATION_ACTIONS + ".", NamedTextColor.RED));
             return;
         }
-        var reward = job.breakReward(material);
+
+        var reward = job.reward(activity, key);
         try {
             long money = Math.multiplyExact(reward.moneyMinorUnits(), count);
             long xp = Math.multiplyExact(reward.jobXpUnits(), count);
-            sender.sendMessage(Component.text(job.id() + " / " + material + " x" + count + ": ", NamedTextColor.GOLD)
+            sender.sendMessage(Component.text(job.id() + " / " + activity + " / " + key.toUpperCase(Locale.ROOT) + " x" + count + ": ", NamedTextColor.GOLD)
                     .append(Component.text(Money.format(money, plugin.runtime().config().moneyScale()), NamedTextColor.GREEN))
                     .append(Component.text(" money, " + xp + " job XP before daily caps. No state was granted.", NamedTextColor.GRAY)));
         } catch (ArithmeticException overflow) {
@@ -141,6 +175,21 @@ public final class JobsAdminCommand implements TabExecutor {
         if (args.length == 2 && args[0].equalsIgnoreCase("migration")) return List.of("scan", "plan", "status", "execute");
         if (args.length == 2 && args[0].equalsIgnoreCase("payout")) return List.of("retry");
         if (args.length == 2 && args[0].equalsIgnoreCase("simulate")) return plugin.runtime().registry().definitions().stream().map(d -> d.id()).toList();
+        if (args.length == 3 && args[0].equalsIgnoreCase("simulate")) {
+            return Arrays.stream(ActivityType.values()).filter(type -> type != ActivityType.DAMAGE)
+                    .map(type -> type.name().toLowerCase(Locale.ROOT))
+                    .filter(value -> value.startsWith(args[2].toLowerCase(Locale.ROOT))).toList();
+        }
+        if (args.length == 4 && args[0].equalsIgnoreCase("simulate")) {
+            var job = plugin.runtime().registry().find(args[1]).orElse(null);
+            if (job == null) return List.of();
+            try {
+                ActivityType type = ActivityType.valueOf(args[2].toUpperCase(Locale.ROOT));
+                return job.activityKeys(type).stream().sorted().toList();
+            } catch (IllegalArgumentException ignored) {
+                return List.of();
+            }
+        }
         return List.of();
     }
 }
