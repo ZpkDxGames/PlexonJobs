@@ -3,6 +3,7 @@ package com.plexon.jobs.integration;
 import com.plexon.jobs.model.JobDefinition;
 import com.plexon.jobs.model.JobProgress;
 import com.plexon.jobs.model.PlayerJobsProfile;
+import com.plexon.jobs.runtime.DailyLimitPersistence;
 import com.plexon.jobs.runtime.DailyLimitService;
 import com.plexon.jobs.runtime.JobsRuntime;
 import com.plexon.jobs.util.Money;
@@ -18,11 +19,14 @@ public final class PlexonJobsExpansion extends PlaceholderExpansion {
     private static final String[] JOB_FIELDS = {"earned_today", "xp_next", "progress", "joined", "level", "xp"};
     private final JobsRuntime runtime;
     private final DailyLimitService limits;
+    private final DailyLimitPersistence dailyPersistence;
     private final String pluginVersion;
 
-    public PlexonJobsExpansion(JobsRuntime runtime, DailyLimitService limits, String pluginVersion) {
+    public PlexonJobsExpansion(JobsRuntime runtime, DailyLimitService limits,
+                               DailyLimitPersistence dailyPersistence, String pluginVersion) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.limits = Objects.requireNonNull(limits, "limits");
+        this.dailyPersistence = Objects.requireNonNull(dailyPersistence, "dailyPersistence");
         this.pluginVersion = Objects.requireNonNull(pluginVersion, "pluginVersion");
     }
 
@@ -40,6 +44,7 @@ public final class PlexonJobsExpansion extends PlaceholderExpansion {
         if (key.equals("active_count")) return Long.toString(profile.activeCount());
         if (key.equals("active_list")) return String.join(", ", profile.activeJobIds());
         if (key.equals("total_earned_today")) {
+            if (!dailyPersistence.ready(player.getUniqueId())) return "";
             return Money.format(limits.total(player.getUniqueId()).moneyMinor(), runtime.config().moneyScale());
         }
 
@@ -59,7 +64,9 @@ public final class PlexonJobsExpansion extends PlaceholderExpansion {
                 case "xp" -> Long.toString(xp);
                 case "xp_next" -> Long.toString(runtime.registry().curve(job.id()).xpToNextLevel(xp));
                 case "progress" -> progressPercent(job.id(), xp, level);
-                case "earned_today" -> Money.format(limits.view(player.getUniqueId(), job.id()).moneyMinor(), runtime.config().moneyScale());
+                case "earned_today" -> dailyPersistence.ready(player.getUniqueId())
+                        ? Money.format(limits.view(player.getUniqueId(), job.id()).moneyMinor(), runtime.config().moneyScale())
+                        : "";
                 default -> null;
             };
         }
