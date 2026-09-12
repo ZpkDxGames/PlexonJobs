@@ -46,7 +46,7 @@ public final class ConfigLoader {
 
         ConfigurationSection cfg = plugin.getConfig();
         int moneyScale = integer(cfg, "payout.money-scale", 2, 0, 6);
-        BigDecimal moneyCap = decimal(cfg, "limits.default-money-per-day", new BigDecimal("0"));
+        BigDecimal moneyCap = decimal(cfg, "limits.default-money-per-day", new BigDecimal("5000.00"));
         if (moneyCap.signum() < 0) throw invalid("limits.default-money-per-day", "must be >= 0");
         String payoutMode = string(cfg, "payout.mode", "COALESCED").trim().toUpperCase(Locale.ROOT);
         if (!payoutMode.equals("COALESCED")) {
@@ -91,9 +91,9 @@ public final class ConfigLoader {
                 integer(cfg, "payout.retry-limit", 3, 0, 100),
                 moneyScale,
                 Money.toMinor(moneyCap, moneyScale),
-                longInteger(cfg, "limits.default-xp-per-day", 0L, 0L, Long.MAX_VALUE),
+                longInteger(cfg, "limits.default-xp-per-day", 250_000L, 0L, Long.MAX_VALUE),
                 integer(cfg, "profiles.save-interval-ticks", 200, 20, 72_000),
-                parseZone(string(cfg, "limits.reset-timezone", "UTC")),
+                parseZone(string(cfg, "limits.reset-timezone", "America/Sao_Paulo")),
                 gameModes,
                 normalizedStringSet(cfg, "gameplay.disabled-worlds", List.of()),
                 new ActivityConfig(
