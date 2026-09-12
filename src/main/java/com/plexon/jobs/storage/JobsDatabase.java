@@ -112,6 +112,7 @@ public final class JobsDatabase {
         }
     }
 
+    /** Persists player_jobs as an exact transactional snapshot so removed job rows cannot resurrect. */
     public void save(PlayerJobsProfile.Snapshot profile, String lastName) {
         long now = System.currentTimeMillis();
         try (Connection connection = open()) {
@@ -120,18 +121,23 @@ public final class JobsDatabase {
                     INSERT INTO players(player_uuid,last_name,updated_at) VALUES(?,?,?)
                     ON CONFLICT(player_uuid) DO UPDATE SET last_name=excluded.last_name, updated_at=excluded.updated_at
                     """);
+                 PreparedStatement deleteJobs = connection.prepareStatement(
+                         "DELETE FROM player_jobs WHERE player_uuid=?");
                  PreparedStatement job = connection.prepareStatement("""
                     INSERT INTO player_jobs(player_uuid,job_id,joined,total_xp,level,updated_at) VALUES(?,?,?,?,?,?)
-                    ON CONFLICT(player_uuid,job_id) DO UPDATE SET
-                      joined=excluded.joined,total_xp=excluded.total_xp,level=excluded.level,updated_at=excluded.updated_at
                     """)) {
-                player.setString(1, profile.playerId().toString());
+                String playerId = profile.playerId().toString();
+                player.setString(1, playerId);
                 player.setString(2, lastName == null ? "" : lastName);
                 player.setLong(3, now);
                 player.executeUpdate();
+
+                deleteJobs.setString(1, playerId);
+                deleteJobs.executeUpdate();
+
                 for (var entry : profile.jobs().entrySet()) {
                     PlayerJobsProfile.ProgressSnapshot progress = entry.getValue();
-                    job.setString(1, profile.playerId().toString());
+                    job.setString(1, playerId);
                     job.setString(2, entry.getKey());
                     job.setInt(3, progress.joined() ? 1 : 0);
                     job.setLong(4, progress.totalXp());
